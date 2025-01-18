@@ -1,10 +1,10 @@
-import os
 import json
-from typing import List, Dict, Union
+from typing import Union, Dict, List
 from dotenv import load_dotenv
 from chroma import ChromaHandler
 import logging
 from llm_config import LLMConfig
+
 
 # Load environment variables
 load_dotenv()
@@ -47,17 +47,11 @@ def format_context(results: List[Dict]) -> str:
 
 def get_chat_prompt(query: str, context: str) -> str:
     """Create the RAG prompt for the LLM."""
-    return f"""You are a helpful expert, answering questions based on the provided context.
-Use ONLY the following documentation excerpts to answer the question. If you cannot answer based on these excerpts, say so.
-Always cite your sources using the [number] format when referencing information.
-
-DOCUMENTATION EXCERPTS:
-{context}
-
-USER QUESTION: {query}
-
-Please provide a clear and concise answer, citing specific sources with [number] format. If multiple sources support a point, cite all of them.
-If you cannot answer the question based on the provided context, say so clearly."""
+    with open("scraper_config.json", "r") as f:
+        config = json.load(f)
+    
+    rag_prompt = config["chat"]["rag_prompt"]
+    return rag_prompt.format(context=context, query=query)
 
 class ChatInterface:
     def __init__(self, collection_names: Union[str, List[str]], model: str = None):
@@ -84,14 +78,13 @@ class ChatInterface:
         
     async def get_response(self, query: str, n_results: int = 5, return_excerpts: bool = False):
         """
-        Process user query across all selected collections:
-        1. Search each ChromaDB collection for relevant context
-        2. Format combined context and create prompt
-        3. Get response from LLM with history
+        Process user query across all collections and stream responses.
+        Yields tuples of (chunk, excerpts) where chunk is a piece of the response
+        and excerpts are the relevant context documents.
         """
         if not self.collection_names:
-            response = "Please select at least one documentation source to search."
-            return (response, []) if return_excerpts else response
+            yield ("Please select at least one documentation source to search.", [])
+            return
             
         all_results = []
         
@@ -105,8 +98,8 @@ class ChatInterface:
                 continue
         
         if not all_results:
-            response = "No relevant information found in the selected documentation."
-            return (response, []) if return_excerpts else response
+            yield ("No relevant information found in the selected documentation.", [])
+            return
         
         # Sort results by distance (lower is better)
         all_results.sort(key=lambda x: x['distance'])
@@ -118,21 +111,25 @@ class ChatInterface:
         context = format_context(top_results)
         prompt = get_chat_prompt(query, context)
         
-        # Add user query to history
-        self._add_to_history("user", prompt)
-        
-        # Get response from LLM using same instance for caching
         try:
-            response = await self.llm.get_response(self.message_history)
-            # Add assistant response to history
-            self._add_to_history("assistant", response)
+            # Get streaming response
+            response_stream = await self.llm.get_response(prompt, stream=True)
+            
+            # Stream chunks while building full response
+            full_response = ""
+            async for chunk in response_stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_response += content
+                    yield (content, top_results)
+            
+            # Add complete response to history
+            self._add_to_history("user", query)
+            self._add_to_history("assistant", full_response)
+            
         except Exception as e:
             logger.error(f"LLM Error: {str(e)}")
-            response = f"Error getting response from LLM: {str(e)}"
-        
-        if return_excerpts:
-            return response, top_results
-        return response
+            yield (f"Error getting response from LLM: {str(e)}", top_results)
         
     def run_chat_loop(self):
         """Run interactive chat loop."""
@@ -145,8 +142,16 @@ class ChatInterface:
                 if not query:
                     continue
                     
-                response = self.get_response(query)
-                print(f"\nAssistant: {response}")
+                async def get_response_stream():
+                    async for response, excerpts in self.get_response(query, return_excerpts=True):
+                        print(f"\nAssistant: {response}")
+                        if excerpts:
+                            print("Excerpts:")
+                            for excerpt in excerpts:
+                                print(excerpt)
+                
+                import asyncio
+                asyncio.run(get_response_stream())
             except KeyboardInterrupt:
                 print("\nGoodbye!")
                 break
