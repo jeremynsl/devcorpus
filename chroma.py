@@ -1,33 +1,33 @@
-import os
 import chromadb
 from chromadb.config import Settings
-from chromadb.utils import embedding_functions
 import logging
 from urllib.parse import urlparse
+from embeddings import EmbeddingManager
 
 logger = logging.getLogger("ChromaDB")
 logger.setLevel(logging.DEBUG)
 
 DB_PATH = "docs_database.db"
 
-sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="avsolatorio/GIST-Embedding-v0"
-)
-
 class ChromaHandler:
     _instance = None
     _client = None
     _collections = {}
+    _embedding_manager = EmbeddingManager()
     
     @classmethod
     def get_collection_name(cls, url: str) -> str:
         """Convert URL to a valid collection name."""
         parsed = urlparse(url)
         # Use domain name as collection name, removing special characters
-        collection_name = parsed.netloc.replace(".", "_").replace("-", "_")
-        # Ensure name meets ChromaDB requirements
+        collection_name = parsed.netloc.replace(".", "_").replace("-", "_").replace(":", "_")
+        
+        # For non-URL inputs, use the raw input
         if not collection_name:
-            collection_name = "default_collection"
+            if not url:
+                return "default_collection"
+            collection_name = url.replace(".", "_").replace("-", "_").replace(":", "_")
+            
         # Add prefix to ensure it starts with a letter
         if not collection_name[0].isalpha():
             collection_name = "collection_" + collection_name
@@ -51,16 +51,16 @@ class ChromaHandler:
         if collection_name and collection_name not in self._collections:
             self._collections[collection_name] = self._client.get_or_create_collection(
                 name=collection_name,
-                embedding_function=sentence_transformer_ef,
+                embedding_function=self._embedding_manager.embedding_function,
                 metadata={"description": "Scraped website content"}
             )
     
     def get_collection(self, collection_name: str):
-        """Get a specific collection."""
+        """Get or create a collection by name."""
         if collection_name not in self._collections:
             self._collections[collection_name] = self._client.get_or_create_collection(
                 name=collection_name,
-                embedding_function=sentence_transformer_ef
+                embedding_function=self._embedding_manager.embedding_function
             )
         return self._collections[collection_name]
         
