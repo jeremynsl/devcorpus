@@ -1,14 +1,10 @@
 # gradio_app.py (or gradio.py)
-import os
-import glob
+
 import asyncio
 import gradio as gr
 from chat import ChatInterface
-from llm_config import LLMConfig
 from main import scrape_recursive, load_config, CONFIG_FILE, logger
-import re
 import logging
-from io import StringIO
 from chroma import ChromaHandler
 from typing import List
 import json
@@ -176,27 +172,29 @@ class GradioChat:
             yield f'<span style="color: #ff4444">Error during scraping: {str(e)}</span>', "Error occurred"
 
     async def chat(self, message: str, history: list, collections: list, model: str):
-        """Handle chat interaction"""
+        """Handle chat interaction with streaming"""
         try:
             # Initialize or update chat interface if collections changed
             if not self.chat_interface or set(collections) != set(self.current_collections):
                 self.chat_interface = ChatInterface(collections, model)
                 self.current_collections = collections
 
-            # Get response with excerpts
-            response, excerpts = await self.chat_interface.get_response(message, return_excerpts=True)
-            self.current_excerpts = excerpts  # Store for reference display
+            # Add user message to history immediately
+            history.append((message, ""))
+            yield history, ""  # Show user message immediately
             
-            # Format references
-            references = self.format_all_references(excerpts)
-            
-            # Add to history and return
-            history.append((message, response))
-            return history, references
-            
+            # Start streaming response
+            current_response = ""
+            async for chunk, excerpts in self.chat_interface.get_response(message, return_excerpts=True):
+                current_response += chunk
+                # Update just the last response in history
+                history[-1] = (message, current_response)
+                yield history, self.format_all_references(excerpts)
+                
         except Exception as e:
             logger.error(f"Chat error: {str(e)}")
-            return history + [(message, f"Error: {str(e)}")], "Error occurred while processing your request."
+            history.append((message, f"Error: {str(e)}"))
+            yield history, "Error occurred while processing your request."
 
     def initialize_chat(self, collections: list, model: str):
         """Initialize (or switch) chat interface"""
