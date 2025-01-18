@@ -4,17 +4,19 @@ import os
 import sys
 import json
 from urllib.parse import urljoin, urlparse, urlunparse
-import re
 import httpx
 from bs4 import BeautifulSoup
 from trafilatura import extract
 from trafilatura.settings import use_config
 from trafilatura.core import extract_metadata
 from tqdm import tqdm
-import hashlib
 from chroma import ChromaHandler
 import argparse
-global_seen_hashes = set()
+from text_processor import TextProcessor
+
+# Initialize text processor as a singleton
+text_processor = TextProcessor()
+
 ###############################################################################
 # Global Config / Constants
 ###############################################################################
@@ -26,11 +28,16 @@ def get_output_filename(url: str) -> str:
     Convert URL to a valid filename by removing special characters and slashes.
     Example: https://svelte.dev/docs/ becomes httpssveltedevdocs.txt
     """
-    # Remove protocol (http:// or https://)
-    filename = url.replace("https://", "").replace("http://", "")
-    # Remove special characters and slashes
-    filename = "".join(c for c in filename if c.isalnum())
-    return f"{filename}.txt"
+    parsed = urlparse(url)
+    # Create scrapedtxt directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(__file__), "scrapedtxt")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Use domain name as filename, removing special characters
+    filename = parsed.netloc.replace(".", "_").replace("-", "_")
+    if not filename:
+        filename = "default"
+    return os.path.join(output_dir, f"{filename}.txt")
 
 ###############################################################################
 # Logging Setup
@@ -243,90 +250,33 @@ def extract_links(html: str, base_url: str, domain: str, start_path: str) -> lis
 def html_to_markdown(html: str) -> str:
     """
     Convert HTML to Markdown text using trafilatura.
+    First remove boilerplate elements, then extract text.
     """
-    # Configure trafilatura to output markdown with links and formatting
+    # Remove common boilerplate elements
+    cleaned_html = text_processor.preprocess_html(html)
+    
+    # Configure trafilatura
     config = use_config()
     config.set("DEFAULT", "include_links", "False")
     config.set("DEFAULT", "include_formatting", "True")
     config.set("DEFAULT", "output_format", "markdown")
-    config.set("DEFAULT", "with_metadata", "True")
+    config.set("DEFAULT", "extraction_timeout", "0")
     
-    return extract(html, config=config) or ""
+    # Try trafilatura first
+    text = extract(cleaned_html, config=config)
+    
+    # Fall back to BeautifulSoup if needed
+    if not text:
+        logger.warning("Trafilatura extraction failed, falling back to BeautifulSoup")
+        soup = BeautifulSoup(cleaned_html, "html.parser")
+        text = soup.get_text(separator="\n", strip=True)
+    
+    return text or ""  # Ensure we never return None
 
-def final_compress(text: str) -> str:
-    """
-    Compress a string of markdown text.
-    """
-    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
-
-def merge_short_lines(text: str, min_length: int = 40) -> str:
-    lines = text.splitlines()
-    merged = []
-    buffer = ""
-    for line in lines:
-        if len(line.strip()) < min_length:
-            buffer += " " + line.strip()
-        else:
-            if buffer:
-                merged.append(buffer.strip())
-                buffer = ""
-            merged.append(line.strip())
-    if buffer:
-        merged.append(buffer.strip())
-    return "\n".join(merged)
-
-def remove_single_period_lines(text: str) -> str:
-    lines = text.splitlines()
-    return "\n".join(line for line in lines if line.strip() != ".")
-
-def compress_whitespace(text: str) -> str:
-    # Replace multiple spaces, newlines, and tabs with a single space
-    return " ".join(text.split())
-    # Duplicate Checker
-def compress_markdown(text: str) -> str:
-    """
-    Compress a string of markdown text.
-        """
-    text = merge_short_lines(text)
-    text = remove_single_period_lines(text)
-   #text = compress_whitespace(text)
-    text = final_compress(text)
-    return text
-###############################################################################
-def segment_text(cleaned_text: str) -> list[str]:
-    """
-    Split cleaned text into segments (for duplicate checking).
-    """
-    # split by paragraphs
-    return re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=[.!?])\s+', cleaned_text)
-
-def hash_text_block(text_block: str) -> str:
-    """
-    Hash a text block for duplicate checking.
-    """
-    normalized = " ".join(text_block.split()).lower()  # Normalize whitespace and case
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-def remove_duplicates(text_blocks: list[str]) -> list[str]:
-    """
-    Remove duplicate links from a list of text blocks.
-    """
-    seen_hashes = set()
-    cleaned_text_blocks = []
-    for text_block in text_blocks:
-        hash_block = hash_text_block(text_block)
-        if hash_block not in seen_hashes and hash_block not in global_seen_hashes:
-            cleaned_text_blocks.append(text_block)
-            global_seen_hashes.add(hash_block)
-            seen_hashes.add(hash_block)
-    return "\n\n".join(cleaned_text_blocks)
-
-# The Recursive Scraper
-###############################################################################
 async def scrape_recursive(start_url: str, user_agent: str, rate_limit: int, use_db: bool = False):
     """
     Recursively scrape all links from start_url domain.
-    Writes results incrementally to a file named after the website.
+    Writes results incrementally to a file in the scrapedtxt directory.
     If use_db is True, also stores content in ChromaDB.
     """
     output_file = get_output_filename(start_url)
@@ -365,76 +315,83 @@ async def scrape_recursive(start_url: str, user_agent: str, rate_limit: int, use
     file_handle.write(f"Start scraping: {start_url}\n\n")
 
     async def worker():
-        while True:
-            try:
-                url = await to_visit.get()
-            except asyncio.CancelledError:
-                break
+        try:
+            while True:
+                try:
+                    url = await to_visit.get()
+                except asyncio.CancelledError:
+                    # Mark the task as done before exiting
+                    if not to_visit.empty():
+                        to_visit.task_done()
+                    break
 
-            # Wait here if user paused
-            await is_paused_event.wait()
+                # Wait here if user paused
+                await is_paused_event.wait()
 
-            if url in visited:
+                if url in visited:
+                    to_visit.task_done()
+                    continue
+
+                visited.add(url)
+                logger.info(f"Scraping: {url}")
+
+                async with semaphore:
+                    html = await fetch_page(url, user_agent)
+
+                if html:
+                    # Convert HTML to text
+                    text = html_to_markdown(html)
+                    if text:
+                        # Write incrementally to file
+                        file_handle.write(f"URL: {url}\n")
+                        file_handle.write(text)
+                        file_handle.write("\n\n---\n\n")
+                        file_handle.flush()
+                        
+                        # Store in ChromaDB if enabled
+                        if db_handler:
+                            db_handler.add_document(text, url)
+
+                    # Extract new links
+                    links = extract_links(html, url, domain, start_path)
+                    for link in links:
+                        if link not in visited:
+                            await to_visit.put(link)
+
+                    # Update progress
+                    progress_bar.update(1)
+                    update_progress()
+
                 to_visit.task_done()
-                continue
-
-            visited.add(url)
-            logger.info(f"Scraping: {url}")
-
-            async with semaphore:
-                html = await fetch_page(url, user_agent)
-
-            if html:
-                md = html_to_markdown(html)
-                cleaned_text = segment_text(md)
-                deduped_text = remove_duplicates(cleaned_text)
-                logger.debug(f"Deduplicated text length: {len(deduped_text)}")
-                deduped_text = compress_markdown(deduped_text)
-                
-                # Only write to file if we got actual content after deduplication
-                if deduped_text.strip():
-                    # Write incrementally to file
-                    file_handle.write(f"URL: {url}\n")
-                    file_handle.write(deduped_text)
-                    file_handle.write("\n\n---\n\n")
-                    file_handle.flush()
-                    
-                    # Store in ChromaDB if enabled
-                    if db_handler:
-                        db_handler.add_document(deduped_text, url)
-
-                # Extract new links
-                links = extract_links(html, url, domain, start_path)
-                for link in links:
-                    if link not in visited:
-                        await to_visit.put(link)
-
-                # Update progress
-                progress_bar.update(1)
-                update_progress()
-
-            to_visit.task_done()
+        except Exception as e:
+            logger.error(f"Worker error: {e}")
+            if not to_visit.empty():
+                to_visit.task_done()
+            raise
 
     # Create multiple workers
     tasks = []
-    for _ in range(rate_limit):
-        t = asyncio.create_task(worker())
-        tasks.append(t)
+    try:
+        for _ in range(rate_limit):
+            t = asyncio.create_task(worker())
+            tasks.append(t)
 
-    # Wait for the queue to empty
-    await to_visit.join()
+        # Wait for the queue to empty
+        await to_visit.join()
+    finally:
+        # Cancel all workers
+        for t in tasks:
+            t.cancel()
+        # Wait for all tasks to complete their cancellation
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Close progress bar and file
+        progress_bar.close()
+        file_handle.write("Scraping completed.\n")
+        file_handle.close()
 
-    # Cancel all workers
-    for t in tasks:
-        t.cancel()
-
-    # Close progress bar and file
-    progress_bar.close()
-    file_handle.write("Scraping completed.\n")
-    file_handle.close()
-
-    logger.info("Scraping completed.")
-    
+        logger.info("Scraping completed.")
 
 ###############################################################################
 # Main Entry
