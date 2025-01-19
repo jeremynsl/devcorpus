@@ -15,17 +15,13 @@ from chat import ChatInterface
 from chroma import ChromaHandler
 
 @pytest.fixture(autouse=True)
-def cleanup_chroma():
-    """Reset ChromaHandler singleton state before and after each test"""
-    # Before test
-    ChromaHandler._instance = None
-    ChromaHandler._client = None
-    ChromaHandler._collections = {}
+def setup_test_env(test_db):
+    """Set up test environment"""
+    # Configure ChromaDB to use test path
+    ChromaHandler.configure(test_db)
     yield
-    # After test
-    ChromaHandler._instance = None
-    ChromaHandler._client = None
-    ChromaHandler._collections = {}
+    # Reset to default after test
+    ChromaHandler.configure(None)
 
 @pytest.fixture
 def test_config():
@@ -115,7 +111,6 @@ async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_con
         return response_gen()
 
     with patch("main.fetch_page", side_effect=mock_fetch), \
-         patch("chroma.DB_PATH", test_db), \
          patch("llm_config.LLMConfig.get_response", side_effect=mock_llm_response), \
          patch("main.CONFIG_FILE", test_config):
 
@@ -190,8 +185,7 @@ async def test_multi_collection_chat(test_config, test_db, mock_html_content):
         'distances': [[0.2]]
     }
 
-    with patch("chroma.DB_PATH", test_db), \
-         patch("llm_config.LLMConfig.get_response", side_effect=mock_llm_response):
+    with patch("llm_config.LLMConfig.get_response", side_effect=mock_llm_response):
 
         # Create mock collections
         mock_collection1 = MagicMock()
@@ -265,8 +259,6 @@ async def test_error_recovery(test_config, test_db):
             raise e
 
     with patch("main.fetch_page", side_effect=mock_failing_fetch), \
-         patch("chroma.DB_PATH", test_db), \
-         patch("main.CONFIG_FILE", test_config), \
          patch("main.tqdm", return_value=mock_tqdm), \
          patch("builtins.open", m), \
          patch("main.watch_for_input", AsyncMock()), \

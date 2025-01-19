@@ -57,6 +57,7 @@ def clean_chroma_db(test_db):
     ChromaHandler._instance = None
     ChromaHandler._client = None
     ChromaHandler._collections = {}
+    ChromaHandler.configure(test_db)  # Configure to use test path
     
     if os.path.exists(test_db):
         try:
@@ -72,9 +73,12 @@ def clean_chroma_db(test_db):
             ChromaHandler._client.reset()
         except Exception as e:
             logger.warning(f"Error resetting ChromaDB client: {e}")
+    
+    # Reset ChromaDB handler to default state
     ChromaHandler._client = None
     ChromaHandler._instance = None
     ChromaHandler._collections = {}
+    ChromaHandler.configure(None)  # Reset to default path
     
     # Give ChromaDB time to release files
     time.sleep(0.5)
@@ -149,37 +153,33 @@ def get_safe_collection_name(url: str) -> str:
 @pytest.mark.asyncio
 async def test_data_flow(test_server, test_db, test_config):
     """Test data passing between components"""
-    
-    # Mock scrape_recursive to avoid queue issues
-    async def mock_scrape(url, user_agent, rate_limit=1, use_db=True):
-        logger.debug(f"Mock scraping {url}")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                logger.debug(f"Response status: {response.status}")
-                html = await response.text()
-                logger.debug(f"Response content: {html[:200]}...")
-                response.raise_for_status()
-        
-        # Process the page directly
-        text = extract_text_from_html(html)
-        logger.debug(f"Extracted text: {text[:200]}...")
-        
-        if text and use_db:
-            # Get collection name from URL
-            collection_name = ChromaHandler.get_collection_name(url)
-            logger.debug(f"Using collection: {collection_name}")
-            
-            # Add document
-            db = ChromaHandler(collection_name)
-            db.add_document(text, url)
-            logger.debug(f"Added document to collection {collection_name}")
-
-    with patch("chroma.DB_PATH", test_db), \
-         patch("main.CONFIG_FILE", test_config):
-        
+    with patch("main.CONFIG_FILE", test_config):
         try:
             # 1. Scrape specific page with timeout
             page_url = f"{test_server}/page1"
+            async def mock_scrape(url, user_agent, rate_limit=1, use_db=True):
+                logger.debug(f"Mock scraping {url}")
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url) as response:
+                        logger.debug(f"Response status: {response.status}")
+                        html = await response.text()
+                        logger.debug(f"Response content: {html[:200]}...")
+                        response.raise_for_status()
+                
+                # Process the page directly
+                text = extract_text_from_html(html)
+                logger.debug(f"Extracted text: {text[:200]}...")
+                
+                if text and use_db:
+                    # Get collection name from URL
+                    collection_name = ChromaHandler.get_collection_name(url)
+                    logger.debug(f"Using collection: {collection_name}")
+                    
+                    # Add document
+                    db = ChromaHandler(collection_name)
+                    db.add_document(text, url)
+                    logger.debug(f"Added document to collection {collection_name}")
+
             async with asyncio.timeout(10):  # Increase timeout for scraping
                 await mock_scrape(page_url, "TestBot/1.0")
 
@@ -208,6 +208,11 @@ async def test_data_flow(test_server, test_db, test_config):
 
             # 3. Verify chat uses correct context with timeout
             chat = ChatInterface([collection_name])
+            
+            # Disable rate limiting for test
+            from llm_config import LLMConfig
+            LLMConfig.configure_rate_limit(0)  # 0 RPM disables rate limiting
+            
             responses = []
             excerpts_seen = []
             async with asyncio.timeout(5):  # 5 second timeout

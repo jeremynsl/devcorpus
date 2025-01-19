@@ -37,11 +37,16 @@ def format_context(results: List[Dict]) -> str:
         if len(text) > 2000:  # Limit each context chunk
             text = text[:2000] + "..."
             
-        context_parts.append(
-            f"[{i}] Excerpt from {result['url']}\n"
-            f"Relevance Score: {1 - result['distance']:.2f}\n"
-            f"Content: {text}\n"
-        )
+        # Build context with metadata
+        context = [f"[{i}] Excerpt from {result['url']}"]
+        context.append(f"Relevance Score: {1 - result['distance']:.2f}")
+        
+        # Add summary if available
+        if 'metadata' in result and result['metadata'].get('summary'):
+            context.append(f"Summary: {result['metadata']['summary']}")
+            
+        context.append(f"Content: {text}")
+        context_parts.append("\n".join(context))
     
     return "\n---\n".join(context_parts)
 

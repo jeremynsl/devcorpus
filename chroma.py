@@ -7,13 +7,49 @@ from embeddings import EmbeddingManager
 logger = logging.getLogger("ChromaDB")
 logger.setLevel(logging.DEBUG)
 
-DB_PATH = "docs_database.db"
+# Add a console handler if none exists
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(name)s | %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+# Default DB path, can be overridden for testing
+DEFAULT_DB_PATH = "docs_database.db"
 
 class ChromaHandler:
+    """Handler for ChromaDB operations with singleton pattern"""
     _instance = None
     _client = None
     _collections = {}
     _embedding_manager = EmbeddingManager()
+    _db_path = None
+    
+    @classmethod
+    def configure(cls, db_path: str = None):
+        """Configure ChromaDB with custom settings"""
+        if db_path:
+            cls._db_path = db_path
+            # Reset instance to force recreation with new path
+            cls._instance = None
+            cls._client = None
+            cls._collections = {}
+    
+    @classmethod
+    def get_db_path(cls):
+        """Get the current DB path"""
+        return cls._db_path or DEFAULT_DB_PATH
+    
+    def __new__(cls, collection_name: str = None):
+        """Singleton pattern to ensure one database connection."""
+        if cls._instance is None:
+            cls._instance = super(ChromaHandler, cls).__new__(cls)
+            cls._client = chromadb.Client(Settings(
+                persist_directory=cls.get_db_path(),
+                is_persistent=True
+            ))
+        return cls._instance
     
     @classmethod
     def get_collection_name(cls, url: str) -> str:
@@ -32,17 +68,6 @@ class ChromaHandler:
         if not collection_name[0].isalpha():
             collection_name = "collection_" + collection_name
         return collection_name
-    
-    def __new__(cls, collection_name: str = None):
-        """Singleton pattern to ensure one database connection."""
-        if cls._instance is None:
-            cls._instance = super(ChromaHandler, cls).__new__(cls)
-            # Initialize the client only once
-            cls._client = chromadb.Client(Settings(
-                persist_directory=DB_PATH,
-                is_persistent=True
-            ))
-        return cls._instance
     
     def __init__(self, collection_name: str = None):
         """
@@ -79,10 +104,22 @@ class ChromaHandler:
         # Use URL as ID but make it safe for ChromaDB
         doc_id = url.replace("/", "_").replace(":", "_")
         
+        # Check for existing metadata
+        existing_metadata = {}
+        try:
+            results = collection.get(ids=[doc_id])
+            if results and results['metadatas']:
+                existing_metadata = results['metadatas'][0]
+        except:
+            pass
+            
+        # Merge with new metadata, preserving existing fields
+        metadata = {**existing_metadata, "url": url}
+        
         collection.upsert(
             documents=[text],
             ids=[doc_id],
-            metadatas=[{"url": url}]
+            metadatas=[metadata]
         )
         
     def query(self, collection_name: str, query_text: str, n_results: int = 5) -> list[dict]:
@@ -115,7 +152,8 @@ class ChromaHandler:
             formatted_results.append({
                 'text': doc,
                 'url': metadata['url'],
-                'distance': distance
+                'distance': distance,
+                'metadata': metadata  # Include full metadata
             })
             
         return formatted_results
@@ -125,7 +163,7 @@ class ChromaHandler:
         """Get list of all available collections (websites)."""
         if cls._client is None:
             cls._client = chromadb.Client(Settings(
-                persist_directory=DB_PATH,
+                persist_directory=cls.get_db_path(),
                 is_persistent=True
             ))
         return cls._client.list_collections()
@@ -136,7 +174,7 @@ class ChromaHandler:
         try:
             if cls._client is None:
                 cls._client = chromadb.Client(Settings(
-                    persist_directory=DB_PATH,
+                    persist_directory=cls.get_db_path(),
                     is_persistent=True
                 ))
             
@@ -150,4 +188,54 @@ class ChromaHandler:
             return True
         except Exception as e:
             logger.error(f"Error deleting collection {collection_name}: {str(e)}")
+            return False
+
+    def update_document_metadata(self, collection_name: str, doc_id: str, metadata_update: dict):
+        """Update metadata for a specific document in a collection."""
+        collection = self.get_collection(collection_name)
+        
+        # Get current metadata
+        results = collection.get(ids=[doc_id])
+        if not results or not results['metadatas']:
+            return False
+            
+        # Merge existing metadata with updates
+        current_metadata = results['metadatas'][0]
+        updated_metadata = {**current_metadata, **metadata_update}
+        
+        # Update the document with new metadata
+        collection.update(
+            ids=[doc_id],
+            metadatas=[updated_metadata]
+        )
+        return True
+        
+    def get_all_documents(self, collection_name: str) -> list:
+        """Get all documents from a collection with their IDs and metadata."""
+        collection = self.get_collection(collection_name)
+        return collection.get()
+
+    def has_summaries(self, collection_name: str) -> bool:
+        """Check if any documents in the collection have summaries."""
+        collection = self.get_collection(collection_name)
+        try:
+            print(f"\nChecking summaries for {collection_name}")  # Debug print
+            results = collection.get()
+            if not results or not results['metadatas']:
+                print(f"No documents found in {collection_name}")  # Debug print
+                return False
+                
+            # Log metadata for debugging
+            print(f"Found {len(results['metadatas'])} documents in {collection_name}")  # Debug print
+            for i, metadata in enumerate(results['metadatas']):
+                print(f"Document {i} metadata: {metadata}")  # Debug print
+                
+            # Check if any document has a summary
+            has_summary = any(metadata.get('summary') for metadata in results['metadatas'])
+            print(f"Collection {collection_name} has_summary: {has_summary}")  # Debug print
+            return has_summary
+            
+        except Exception as e:
+            print(f"Error checking summaries for {collection_name}: {str(e)}")  # Debug print
+            logger.error(f"Error checking summaries for {collection_name}: {str(e)}")
             return False

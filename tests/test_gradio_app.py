@@ -3,11 +3,15 @@ from unittest.mock import patch,MagicMock
 import sys
 from pathlib import Path
 import gradio as gr
+import os
+import tempfile
+import time
+import shutil
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-from gradio_app import GradioChat, colorize_log
+from gradio_app import GradioChat, colorize_log, ChromaHandler
 
 class AsyncLLMResponse:
     """Mock LiteLLM streaming response"""
@@ -64,21 +68,48 @@ def mock_chat_interface():
 
 @pytest.fixture
 def mock_chroma():
+    """Mock ChromaDB handler"""
     handler = MagicMock()
+    # Mock get_available_collections to return test collections
     handler.get_available_collections.return_value = ["collection1", "collection2"]
+    # Mock query to return empty results
+    handler.query.return_value = []
+    # Mock delete_collection to return False
     handler.delete_collection.return_value = False
     return handler
 
+@pytest.fixture(autouse=True)
+def setup_test_env():
+    """Set up test environment"""
+    # Configure ChromaDB to use a temporary test directory
+    test_db = os.path.join(tempfile.gettempdir(), f"chroma_test_gradio_{int(time.time())}")
+    ChromaHandler.configure(test_db)
+    
+    yield
+    
+    # Clean up after test
+    ChromaHandler._instance = None
+    ChromaHandler._client = None
+    ChromaHandler._collections = {}
+    ChromaHandler.configure(None)  # Reset to default path
+    
+    if os.path.exists(test_db):
+        try:
+            shutil.rmtree(test_db)
+        except Exception as e:
+            print(f"Could not clean up test DB: {e}")
+
 @pytest.fixture
 def gradio_chat(mock_config, mock_chat_interface, mock_chroma):
+    """Create GradioChat instance with mocks"""
     with patch("gradio_app.config", mock_config), \
-         patch("gradio_app.ChatInterface", return_value=mock_chat_interface), \
          patch("gradio_app.ChromaHandler") as mock_handler_class:
+        # Configure mock handler class
         mock_handler_class.get_available_collections.return_value = ["collection1", "collection2"]
-        mock_handler_class.delete_collection.return_value = False
+        mock_handler_class.return_value = mock_chroma
+        
         chat = GradioChat()
         chat.chat_interface = mock_chat_interface
-        chat.current_collections = ["collection1"]
         return chat
 
 @pytest.mark.asyncio
@@ -89,7 +120,7 @@ async def test_chat_streaming(gradio_chat):
     
     async for new_history, refs in gradio_chat.chat("test message", history, ["collection1"], "test-model"):
         if len(new_history) > 0:
-            msg = new_history[-1][1]
+            msg = new_history[-1]["content"]
             if msg:
                 responses.append(msg)
     
@@ -98,17 +129,21 @@ async def test_chat_streaming(gradio_chat):
 
 def test_refresh_databases(gradio_chat):
     """Test refreshing collection list"""
-    dropdown, status = gradio_chat.refresh_databases(["collection1"])
-    assert isinstance(dropdown, gr.Dropdown)
-    # Handle both tuple and string choices
-    choices = []
-    for choice in dropdown.choices:
-        if isinstance(choice, tuple):
-            choices.append(choice[0])
-        else:
-            choices.append(choice)
-    assert sorted(choices) == sorted(["collection1", "collection2"])
-    assert "refreshed" in status.lower()
+    with patch("gradio_app.ChromaHandler") as mock_handler:
+        # Configure mock to return test collections
+        mock_handler.get_available_collections.return_value = ["collection1", "collection2"]
+        
+        dropdown, status = gradio_chat.refresh_databases(["collection1"])
+        assert isinstance(dropdown, gr.Dropdown)
+        # Handle both tuple and string choices
+        choices = []
+        for choice in dropdown.choices:
+            if isinstance(choice, tuple):
+                choices.append(choice[0])
+            else:
+                choices.append(choice)
+        assert sorted(choices) == sorted(["collection1", "collection2"])
+        assert "refreshed" in status.lower()
 
 def test_delete_collection_error(gradio_chat):
     """Test error handling in delete collection"""
@@ -135,7 +170,7 @@ async def test_chat_error_handling(gradio_chat):
         error_found = False
         async for new_history, refs in gradio_chat.chat("test message", history, ["collection1"], "test-model"):
             if new_history and len(new_history) > 0:
-                if "error" in new_history[-1][1].lower():
+                if "error" in new_history[-1]["content"].lower():
                     error_found = True
                     break
         assert error_found, "Error message not found in chat response"

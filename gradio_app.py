@@ -8,6 +8,10 @@ import logging
 from chroma import ChromaHandler
 from typing import List
 import json
+import warnings
+
+# Filter HF_HOME deprecation warning
+warnings.filterwarnings('ignore', category=UserWarning, message='.*HF_HOME.*')
 
 # Load config
 with open("scraper_config.json", "r") as f:
@@ -35,9 +39,43 @@ class GradioChat:
     def refresh_databases(self, current_selections: List[str]):
         """Refresh the list of available databases while maintaining current selections"""
         collections = ChromaHandler.get_available_collections()
+        
+        # Check which collections have summaries
+        db = ChromaHandler()
+        collection_choices = []
+        for collection in collections:
+            results = db.get_all_documents(collection)
+            has_summary = results and results['metadatas'] and any(
+                metadata.get('summary') for metadata in results['metadatas']
+            )
+            if has_summary:
+                collection_choices.append((f"📝 {collection}", collection))
+            else:
+                collection_choices.append((collection, collection))
+        
         # Keep only current selections that still exist
         valid_selections = [s for s in current_selections if s in collections]
-        return gr.Dropdown(choices=collections, value=valid_selections, multiselect=True), "Collections refreshed"
+        
+        return gr.Dropdown(choices=collection_choices, value=valid_selections, multiselect=True), "Collections refreshed"
+
+    def get_formatted_collections(self):
+        """Get collection list with summary indicators for initial dropdown"""
+        collections = ChromaHandler.get_available_collections()
+        db = ChromaHandler()
+        collection_choices = []
+        
+        for collection in collections:
+            results = db.get_all_documents(collection)
+            has_summary = results and results['metadatas'] and any(
+                metadata.get('summary') for metadata in results['metadatas']
+            )
+            
+            if has_summary:
+                collection_choices.append((f"📝 {collection}", collection))
+            else:
+                collection_choices.append((collection, collection))
+                
+        return collection_choices
 
     def delete_collection(self, collections_to_delete: List[str]):
         """Delete selected collections and refresh the list"""
@@ -76,12 +114,23 @@ class GradioChat:
             
         formatted_refs = []
         for i, excerpt in enumerate(excerpts, 1):
-            formatted_refs.append(
-                f"**Reference [{i}]** from {excerpt['url']}\n"
-                f"Relevance Score: {1 - excerpt['distance']:.2f}\n\n"
-                f"{excerpt['text']}\n"
-                f"{'-' * 80}\n"  # Separator between references
-            )
+            # Build reference header
+            ref_text = [f"**Reference [{i}]** from {excerpt['url']}"]
+            
+            # Add metadata
+            ref_text.append(f"Relevance Score: {1 - excerpt['distance']:.2f}")
+            if 'metadata' in excerpt and excerpt['metadata'].get('summary'):
+                ref_text.append(f"Summary: {excerpt['metadata']['summary']}")
+            
+            # Add separator and main text
+            ref_text.extend([
+                "",  # Empty line before content
+                excerpt['text'],
+                "-" * 80  # Separator between references
+            ])
+            
+            formatted_refs.append("\n".join(ref_text))
+            
         return "\n".join(formatted_refs)
 
     async def start_scraping(self, url: str, store_db: bool, progress: gr.HTML, tqdm_status: gr.Textbox):
@@ -173,28 +222,48 @@ class GradioChat:
 
     async def chat(self, message: str, history: list, collections: list, model: str):
         """Handle chat interaction with streaming"""
-        try:
-            # Initialize or update chat interface if collections changed
-            if not self.chat_interface or set(collections) != set(self.current_collections):
-                self.chat_interface = ChatInterface(collections, model)
-                self.current_collections = collections
-
-            # Add user message to history immediately
-            history.append((message, ""))
-            yield history, ""  # Show user message immediately
+        if not self.chat_interface:
+            history.append({"role": "assistant", "content": "Please select a documentation source first."})
+            yield history, ""
+            return
             
-            # Start streaming response
-            current_response = ""
+        if not message:
+            history.append({"role": "assistant", "content": "Please enter a message."})
+            yield history, ""
+            return
+            
+        # Format user message
+        history.append({"role": "user", "content": message})
+        # Add empty assistant message
+        history.append({"role": "assistant", "content": ""})
+        
+        # Initialize references display
+        self.current_excerpts = []
+        current_response = ""
+        
+        try:
+            # Stream the response
             async for chunk, excerpts in self.chat_interface.get_response(message, return_excerpts=True):
-                current_response += chunk
-                # Update just the last response in history
-                history[-1] = (message, current_response)
-                yield history, self.format_all_references(excerpts)
+                # Update references
+                if excerpts and not self.current_excerpts:
+                    self.current_excerpts = excerpts
+                    references_text = self.format_all_references(excerpts)
+                else:
+                    references_text = self.format_all_references(self.current_excerpts)
+                
+                # Handle chunk whether it's a string or dict with content
+                chunk_text = chunk["content"] if isinstance(chunk, dict) else chunk
+                # Append to current response
+                current_response += chunk_text
+                # Update the last message (assistant's response)
+                history[-1]["content"] = current_response
+                
+                yield history, references_text
                 
         except Exception as e:
-            logger.error(f"Chat error: {str(e)}")
-            history.append((message, f"Error: {str(e)}"))
-            yield history, "Error occurred while processing your request."
+            error_msg = f"Error: {str(e)}"
+            history[-1]["content"] = error_msg
+            yield history, error_msg
 
     def initialize_chat(self, collections: list, model: str):
         """Initialize (or switch) chat interface"""
@@ -207,6 +276,91 @@ class GradioChat:
         self.history = []
         self.current_excerpts = []
         return [], f"Selected collections: {', '.join(collections) if collections else 'None'}", ""
+
+    async def generate_summaries(self, collections: list, model: str, regenerate: bool = False, progress=gr.Progress()) -> str:
+        """Generate summaries for all documents in selected collections."""
+        if not collections:
+            return "Please select at least one collection."
+            
+        if not self.chat_interface:
+            self.initialize_chat(collections, model)
+            
+        total_processed = 0
+        total_updated = 0
+        total_skipped = 0
+        failed_docs = []
+        max_retries = 3
+        retry_delay = 5  # seconds
+        
+        try:
+            for collection_name in collections:
+                # Get all documents from collection
+                docs = self.chat_interface.db.get_all_documents(collection_name)
+                if not docs or not docs['documents']:
+                    continue
+                    
+                total_docs = len(docs['documents'])
+                progress(0, desc=f"Processing {collection_name}")
+                
+                for i, (doc_id, text) in enumerate(zip(docs['ids'], docs['documents'])):
+                    progress((i + 1) / total_docs)
+                    
+                    # Skip if already has summary and not regenerating
+                    if not regenerate and docs['metadatas'][i].get('summary'):
+                        total_skipped += 1
+                        total_processed += 1
+                        continue
+                    
+                    # Generate summary using the chat model with retries
+                    prompt = "Summarize the following text in one sentence, focusing on it's key purpose, main idea, and unique value. Avoid unnecessary details and keep it concise.\n\n" + text
+                    summary = ""
+                    success = False
+                    
+                    for retry in range(max_retries):
+                        try:
+                            summary_chunks = []
+                            async for chunk, _ in self.chat_interface.get_response(prompt, return_excerpts=False):
+                                chunk_text = chunk["content"] if isinstance(chunk, dict) else chunk
+                                summary_chunks.append(chunk_text)
+                            summary = "".join(summary_chunks).strip()
+                            
+                            # Verify we got a valid summary
+                            if summary and not summary.startswith("Error"):
+                                success = True
+                                break
+                            
+                        except Exception as e:
+                            logger.error(f"Error generating summary (attempt {retry + 1}) for {doc_id}: {str(e)}")
+                            if retry < max_retries - 1:
+                                await asyncio.sleep(retry_delay * (retry + 1))  # Exponential backoff
+                            continue
+                    
+                    if success:
+                        # Update document metadata with summary
+                        if self.chat_interface.db.update_document_metadata(
+                            collection_name, 
+                            doc_id, 
+                            {"summary": summary}
+                        ):
+                            total_updated += 1
+                    else:
+                        failed_docs.append(doc_id)
+                    
+                    total_processed += 1
+            
+            status = f"Processed {total_processed} documents. "
+            if total_updated > 0:
+                status += f"Added/updated {total_updated} summaries. "
+            if total_skipped > 0:
+                status += f"Skipped {total_skipped} existing summaries. "
+            if failed_docs:
+                status += f"\nFailed to generate summaries for {len(failed_docs)} documents after {max_retries} retries."
+            return status
+            
+        except Exception as e:
+            error_msg = f"Error generating summaries: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
 def create_demo():
     """Create the Gradio demo Blocks layout."""
@@ -225,6 +379,22 @@ def create_demo():
         
         .gradio-container {
             background-color: var(--background-color) !important;
+        }
+        
+        /* Make emojis more visible */
+        .collection-emoji {
+            font-size: 1.2em;
+            margin-right: 0.5em;
+            opacity: 1 !important;
+        }
+        
+        /* Ensure dropdown text is visible */
+        .gr-dropdown {
+            color: var(--text-color) !important;
+        }
+        .gr-dropdown option {
+            background-color: var(--surface-color);
+            color: var(--text-color);
         }
         
         .tabs > .tab-nav {
@@ -305,6 +475,58 @@ def create_demo():
             display: inline-block !important;
         }
         
+        /* Markdown styling */
+        .chat-window {
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        
+        .chat-window code {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+        
+        .chat-window pre {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px 0;
+            overflow-x: auto;
+        }
+        
+        .chat-window pre code {
+            background: none;
+            border: none;
+            padding: 0;
+        }
+        
+        .chat-window blockquote {
+            border-left: 3px solid var(--accent-color);
+            margin: 8px 0;
+            padding-left: 12px;
+            color: #cccccc;
+        }
+        
+        .chat-window table {
+            border-collapse: collapse;
+            margin: 8px 0;
+            width: 100%;
+        }
+        
+        .chat-window th,
+        .chat-window td {
+            border: 1px solid var(--border-color);
+            padding: 6px 8px;
+            text-align: left;
+        }
+        
+        .chat-window th {
+            background: var(--surface-color);
+        }
+        
         .chat-window {
             padding: 16px;
             background-color: var(--surface-color);
@@ -349,27 +571,36 @@ def create_demo():
             with gr.Row():
                 with gr.Column(scale=4):
                     collections = gr.Dropdown(
-                        choices=ChromaHandler.get_available_collections(),
+                        choices=chat_app.get_formatted_collections(),  # Use formatted collections on initial load
                         label="Select Documentation Sources",
                         info="Choose one or more collections to search",
                         multiselect=True,
                         value=[],  # Start with no selection
                         container=True
                     )
-                model = gr.Dropdown(
-                    choices=config["chat"]["models"]["available"],
-                    value=config["chat"]["models"]["default"],
-                    label="Model",
-                    container=True,
-                    scale=2
-                     )
+                with gr.Column(scale=1):
+                    model = gr.Dropdown(
+                        choices=config["chat"]["models"]["available"],
+                        value=config["chat"]["models"]["default"],
+                        label="Model",
+                        container=True,
+                        scale=2
+                    )
+                    with gr.Row():
+                        add_summaries_btn = gr.Button("📝 Add Summaries", variant="secondary")
+                        regenerate_summaries = gr.Checkbox(
+                            label="Regenerate Existing",
+                            value=False,
+                            info="If checked, will regenerate existing summaries"
+                        )
                 with gr.Column(scale=1):
                     delete_btn = gr.Button("🗑️ Delete Collection", variant="secondary")
                     refresh_btn = gr.Button("🔄 Refresh Collections")
                     status_text = gr.Textbox(
                         label="Status",
                         interactive=False,
-                        container=True
+                        container=True,
+                        #lines=10  # Make it bigger to show debug info
                     )
                     
                 
@@ -377,12 +608,21 @@ def create_demo():
             
             with gr.Row():
                 chatbot = gr.Chatbot(
-                    [],
+                    value=[],
+                    type="messages",  # Use modern message format
                     label="Chat History",
                     height=400,
                     show_label=True,
                     container=True,
-                    elem_classes="chat-window"
+                    elem_classes="chat-window",
+                    render_markdown=True,
+                    layout="bubble",  # Better layout for markdown content
+                    line_breaks=True,  # Preserve line breaks in messages
+                    latex_delimiters=[  # Support LaTeX for math
+                        {"left": "$$", "right": "$$", "display": True},
+                        {"left": "$", "right": "$", "display": False},
+                    ],
+                    sanitize_html=True  # Safely render HTML/markdown
                 )
             
             with gr.Row():
@@ -452,7 +692,7 @@ def create_demo():
             submit_btn.click(
                 fn=chat_app.chat,
                 inputs=[message, chatbot, collections, model],
-                outputs=[chatbot, references],  # Only update content, not accordion state
+                outputs=[chatbot, references],
                 queue=True
             ).then(
                 fn=lambda: "",
@@ -463,13 +703,20 @@ def create_demo():
             message.submit(
                 fn=chat_app.chat,
                 inputs=[message, chatbot, collections, model],
-                outputs=[chatbot, references],  # Only update content, not accordion state
+                outputs=[chatbot, references],
                 queue=True
             ).then(
                 fn=lambda: "",
                 outputs=message
             )
 
+            # Connect add summaries button
+            add_summaries_btn.click(
+                fn=chat_app.generate_summaries,
+                inputs=[collections, model, regenerate_summaries],
+                outputs=[status_text],
+            )
+            
     return demo
 
 if __name__ == "__main__":
