@@ -48,10 +48,13 @@ class GradioChat:
             has_summary = results and results['metadatas'] and any(
                 metadata.get('summary') for metadata in results['metadatas']
             )
+            
+            # Format display name with dots instead of underscores
+            display_name = collection.replace("_", ".")
             if has_summary:
-                collection_choices.append((f"📝 {collection}", collection))
+                collection_choices.append((f"📝 {display_name}", collection))
             else:
-                collection_choices.append((collection, collection))
+                collection_choices.append((display_name, collection))
         
         # Keep only current selections that still exist
         valid_selections = [s for s in current_selections if s in collections]
@@ -70,10 +73,12 @@ class GradioChat:
                 metadata.get('summary') for metadata in results['metadatas']
             )
             
+            # Format display name with dots instead of underscores
+            display_name = collection.replace("_", ".")
             if has_summary:
-                collection_choices.append((f"📝 {collection}", collection))
+                collection_choices.append((f"📝 {display_name}", collection))
             else:
-                collection_choices.append((collection, collection))
+                collection_choices.append((display_name, collection))
                 
         return collection_choices
 
