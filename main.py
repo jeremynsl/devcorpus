@@ -4,7 +4,7 @@ import os
 import sys
 import json
 from urllib.parse import urljoin, urlparse, urlunparse
-import httpx
+import aiohttp
 from bs4 import BeautifulSoup
 from trafilatura import extract
 from trafilatura.settings import use_config
@@ -178,40 +178,40 @@ async def fetch_page(url: str, user_agent: str) -> str:
         proxy_url = await get_next_proxy()
         logger.debug(f"Fetching {url} [Attempt {attempts}] (Proxy={proxy_url})")
 
-        # Prepare client initialization arguments
-        client_args = {
+        # Prepare session initialization arguments
+        session_args = {
             "headers": {"User-Agent": user_agent},
-            "timeout": 30.0,
-            "follow_redirects": True,
+            "timeout": aiohttp.ClientTimeout(total=30)
         }
         # If a proxy URL is available, add it to the arguments
         if proxy_url:
-            client_args["proxy"] = proxy_url
+            session_args["proxy"] = proxy_url
 
-        async with httpx.AsyncClient(**client_args) as client:
-            try:
-                response = await client.get(url)
-                response.raise_for_status()
-                return response.text
-            except httpx.HTTPStatusError as e:
-                status_code = e.response.status_code
-                # If a "block" or "forbidden", try switching proxy
-                if status_code in (403, 429):
-                    logger.warning(
-                        f"Received status {status_code} for {url}. "
-                        "Attempting to switch proxy and retry."
-                    )
-                    await switch_to_next_proxy()
-                else:
-                    logger.error(f"HTTP error {status_code} for {url}: {e}")
-                    return ""
-            except httpx.HTTPError as e:
-                # Could be ConnectionError, Timeout, etc.
-                logger.error(f"Failed to fetch {url}: {e}")
+        try:
+            async with aiohttp.ClientSession(**session_args) as session:
+                async with session.get(url) as response:
+                    response.raise_for_status()
+                    return await response.text()
+        except aiohttp.ClientResponseError as e:
+            status_code = e.status
+            # If a "block" or "forbidden", try switching proxy
+            if status_code in (403, 429):
+                logger.warning(
+                    f"Received status {status_code} for {url}. "
+                    f"Switching proxy and retrying. (Attempt {attempts}/{max_retries})"
+                )
                 await switch_to_next_proxy()
+                if attempts < max_retries:
+                    continue
+            raise  # Re-raise if we're out of retries or for other status codes
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.error(f"Error fetching {url}: {str(e)}")
+            if attempts < max_retries:
+                await switch_to_next_proxy()
+                continue
+            raise  # Re-raise if we're out of retries
 
-    logger.error(f"All proxies failed or request error for {url}. Giving up.")
-    return ""
+    raise Exception(f"Failed to fetch {url} after {max_retries} attempts")
 
 def extract_links(html: str, base_url: str, domain: str, start_path: str) -> list[str]:
     """
@@ -323,50 +323,59 @@ async def scrape_recursive(start_url: str, user_agent: str, rate_limit: int, use
                     # Mark the task as done before exiting
                     if not to_visit.empty():
                         to_visit.task_done()
+                    raise  # Re-raise to properly handle cancellation
+                except asyncio.QueueEmpty:
                     break
 
-                # Wait here if user paused
-                await is_paused_event.wait()
+                try:
+                    # Wait here if user paused
+                    await is_paused_event.wait()
 
-                if url in visited:
+                    if url in visited:
+                        to_visit.task_done()
+                        continue
+
+                    visited.add(url)
+                    logger.info(f"Scraping: {url}")
+
+                    async with semaphore:
+                        html = await fetch_page(url, user_agent)
+
+                    if html:
+                        # Convert HTML to text
+                        text = html_to_markdown(html)
+                        if text:
+                            # Write incrementally to file
+                            file_handle.write(f"URL: {url}\n")
+                            file_handle.write(text)
+                            file_handle.write("\n\n---\n\n")
+                            file_handle.flush()
+                            
+                            # Store in ChromaDB if enabled
+                            if db_handler:
+                                db_handler.add_document(text, url)
+
+                        # Extract new links
+                        links = extract_links(html, url, domain, start_path)
+                        for link in links:
+                            if link not in visited:
+                                await to_visit.put(link)
+
+                        # Update progress
+                        progress_bar.update(1)
+                        update_progress()
+
                     to_visit.task_done()
-                    continue
-
-                visited.add(url)
-                logger.info(f"Scraping: {url}")
-
-                async with semaphore:
-                    html = await fetch_page(url, user_agent)
-
-                if html:
-                    # Convert HTML to text
-                    text = html_to_markdown(html)
-                    if text:
-                        # Write incrementally to file
-                        file_handle.write(f"URL: {url}\n")
-                        file_handle.write(text)
-                        file_handle.write("\n\n---\n\n")
-                        file_handle.flush()
-                        
-                        # Store in ChromaDB if enabled
-                        if db_handler:
-                            db_handler.add_document(text, url)
-
-                    # Extract new links
-                    links = extract_links(html, url, domain, start_path)
-                    for link in links:
-                        if link not in visited:
-                            await to_visit.put(link)
-
-                    # Update progress
-                    progress_bar.update(1)
-                    update_progress()
-
-                to_visit.task_done()
+                except Exception as e:
+                    logger.error(f"Error processing {url}: {e}")
+                    to_visit.task_done()  # Always mark task as done even on error
+                    continue  # Continue to next URL instead of crashing worker
+        except asyncio.CancelledError:
+            # Handle final cleanup on cancellation
+            logger.info("Worker cancelled, cleaning up...")
+            raise
         except Exception as e:
             logger.error(f"Worker error: {e}")
-            if not to_visit.empty():
-                to_visit.task_done()
             raise
 
     # Create multiple workers
@@ -378,13 +387,21 @@ async def scrape_recursive(start_url: str, user_agent: str, rate_limit: int, use
 
         # Wait for the queue to empty
         await to_visit.join()
+    except Exception as e:
+        logger.error(f"Error during scraping: {e}")
+        raise
     finally:
         # Cancel all workers
         for t in tasks:
-            t.cancel()
+            if not t.done():
+                t.cancel()
+        
         # Wait for all tasks to complete their cancellation
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                logger.error(f"Error during worker cleanup: {e}")
         
         # Close progress bar and file
         progress_bar.close()

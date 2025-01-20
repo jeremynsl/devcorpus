@@ -74,16 +74,30 @@ def test_remove_anchor():
 @pytest.mark.asyncio
 async def test_fetch_page():
     """Test page fetching with retries"""
+    # Create a mock response that mimics an aiohttp response
     mock_response = AsyncMock()
-    mock_response.text = "Test content"
-    mock_response.raise_for_status = AsyncMock()  # Add this method
-    
-    mock_client = AsyncMock()
-    mock_client.__aenter__.return_value.get.return_value = mock_response
-    
-    with patch("httpx.AsyncClient", return_value=mock_client):
+    mock_response.text.return_value = "Test content"
+    mock_response.raise_for_status = AsyncMock()
+
+    # Create a mock context manager for session.get()
+    mock_get_context = AsyncMock()
+    mock_get_context.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_get_context.__aexit__ = AsyncMock(return_value=None)
+
+    # Create a mock session
+    mock_session = AsyncMock()
+    # Setup the session so that its async context manager returns itself
+    mock_session.__aenter__.return_value = mock_session
+    mock_session.__aexit__.return_value = None
+
+    # Use a synchronous MagicMock for the get method
+    mock_session.get = MagicMock(return_value=mock_get_context)
+
+    # Patch aiohttp.ClientSession to use our mock_session
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         content = await fetch_page("http://test.com", "TestBot/1.0")
-        assert content == "Test content"
+
+    assert content == "Test content"
 
 def test_extract_links(mock_html):
     """Test link extraction"""
