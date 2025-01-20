@@ -71,18 +71,16 @@ class LLMConfig:
     
     async def get_response(self, prompt: str, stream: bool = False) -> Union[str, AsyncGenerator[str, None]]:
         """Get async response from LLM"""
-        messages = [
-            {
-                "role": "system",
-                "content": self.system_prompt,
-                "cache_control": {"type": "ephemeral"}
-            },
-            {
-                "role": "user",
-                "content": prompt,
-                "cache_control": {"type": "ephemeral"}
-            }
-        ]
+        # Base message structure
+        system_message = {"role": "system", "content": self.system_prompt}
+        user_message = {"role": "user", "content": prompt}
+        
+        # Add cache_control only for non-Groq models
+        if not self.model.startswith("groq/") and not self.model.startswith("mistral/"):
+            system_message["cache_control"] = {"type": "ephemeral"}
+            user_message["cache_control"] = {"type": "ephemeral"}
+            
+        messages = [system_message, user_message]
         
         # Wait for rate limit before making request
         await self.get_rate_limiter().wait()

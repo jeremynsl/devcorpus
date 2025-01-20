@@ -9,6 +9,8 @@ from chroma import ChromaHandler
 from typing import List
 import json
 import warnings
+from chunking import ChunkingManager
+from llm_config import LLMConfig
 
 # Filter HF_HOME deprecation warning
 warnings.filterwarnings('ignore', category=UserWarning, message='.*HF_HOME.*')
@@ -138,13 +140,20 @@ class GradioChat:
             
         return "\n".join(formatted_refs)
 
-    async def start_scraping(self, url: str, store_db: bool, progress: gr.HTML, tqdm_status: gr.Textbox):
+    async def start_scraping(self, url: str, store_db: bool, use_cluster: bool, progress: gr.HTML, tqdm_status: gr.Textbox):
         """Start the scraping process and update progress"""
         if not url.startswith(('http://', 'https://')):
             yield "Error: Invalid URL. Must start with http:// or https://", ""
             return
             
         try:
+            # Set the chunking method based on checkbox - this affects ChromaHandler globally
+            chunking_manager = ChunkingManager()
+            if use_cluster:
+                chunking_manager.use_cluster_chunker()
+            else:
+                chunking_manager.use_recursive_chunker()
+                
             # Create handler for the Gradio progress box
             class ProgressHandler(logging.Handler):
                 def __init__(self):
@@ -217,10 +226,31 @@ class GradioChat:
                     "Scraping completed"
                 )
                 
+            except Exception as e:
+                # Cancel tasks in case of error
+                if not scrape_task.done():
+                    scrape_task.cancel()
+                    try:
+                        await scrape_task
+                    except asyncio.CancelledError:
+                        pass
+                yield f'<span style="color: #ff4444">Error during scraping: {str(e)}</span>', "Error occurred"
+                
             finally:
                 # Clean up
                 monitor_task.cancel()
+                try:
+                    await monitor_task
+                except asyncio.CancelledError:
+                    pass
                 logger.removeHandler(progress_handler)
+                # Clear the queue
+                while not queue.empty():
+                    try:
+                        queue.get_nowait()
+                        queue.task_done()
+                    except asyncio.QueueEmpty:
+                        break
                 
         except Exception as e:
             yield f'<span style="color: #ff4444">Error during scraping: {str(e)}</span>', "Error occurred"
@@ -270,17 +300,21 @@ class GradioChat:
             history[-1]["content"] = error_msg
             yield history, error_msg
 
-    def initialize_chat(self, collections: list, model: str):
+    def initialize_chat(self, collections: list, model: str, rate_limit: int = 9):
         """Initialize (or switch) chat interface"""
-        if collections:
-            self.chat_interface = ChatInterface(collections, model)
-            self.current_collections = collections
-        else:
-            self.chat_interface = None
-            self.current_collections = None
+        if not collections:
+            return [], "Please select at least one documentation source.", ""
+            
+        # Configure rate limit
+        LLMConfig.configure_rate_limit(rate_limit)
+        
+        # Create new chat interface
+        self.chat_interface = ChatInterface(collections, model)
+        self.current_collections = collections
         self.history = []
         self.current_excerpts = []
-        return [], f"Selected collections: {', '.join(collections) if collections else 'None'}", ""
+        
+        return [], f"Chat initialized with: {', '.join(collections)}", ""
 
     async def generate_summaries(self, collections: list, model: str, regenerate: bool = False, progress=gr.Progress()) -> str:
         """Generate summaries for all documents in selected collections."""
@@ -317,7 +351,19 @@ class GradioChat:
                         continue
                     
                     # Generate summary using the chat model with retries
-                    prompt = "Summarize the following text in one sentence, focusing on it's key purpose, main idea, and unique value. Avoid unnecessary details and keep it concise.\n\n" + text
+                    prompt = f"""Instruction:
+                                Summarize the following text in one sentence, focusing on its key purpose, main idea, and unique value. Avoid unnecessary details and keep it concise. Do not include any preamble, such as "Here is a summarized answer."
+                                
+                                Example Input:
+                                Svelte is a modern JavaScript framework that shifts the focus from runtime operations to compile-time transformations. By compiling components into highly efficient imperative code that updates the DOM directly, Svelte eliminates the need for a virtual DOM and reduces runtime overhead. It introduces unique features like reactive declarations, stores, and runes to handle state and reactivity declaratively. Compared to other frameworks, Svelte is lightweight, resulting in smaller bundle sizes and faster page loads. Additionally, its simple syntax and integration of CSS directly within components improve developer productivity and maintainability.
+
+                                Example Output:
+                                Svelte is a lightweight JavaScript framework that compiles components into efficient code, eliminating the virtual DOM for faster performance and offering features like reactive declarations and integrated CSS for simplicity.
+
+                                Input:
+                                {text}
+
+                                Output:\n\n"""
                     summary = ""
                     success = False
                     
@@ -540,7 +586,8 @@ def create_demo():
             border-radius: 8px;
         }
     """) as demo:
-        gr.Markdown("# Documentation Chat & Scraper")
+        # Configure queue with default settings
+        demo.queue(default_concurrency_limit=1)
         
         with gr.Tab("Scraper"):
             with gr.Row():
@@ -553,6 +600,11 @@ def create_demo():
                     label="Store in Database",
                     value=True,
                     info="Store in both text and ChromaDB (recommended)"
+                )
+                use_cluster = gr.Checkbox(
+                    label="Use Cluster Chunking",
+                    value=False,
+                    info="Use semantic clustering for chunking (slower but more accurate)"
                 )
                 scrape_btn = gr.Button("Start Scraping", variant="primary", scale=1)
                 
@@ -590,6 +642,14 @@ def create_demo():
                         label="Model",
                         container=True,
                         scale=2
+                    )
+                    rate_limit = gr.Number(
+                        value=9,
+                        label="Rate Limit (RPM)",
+                        info="API calls per minute",
+                        minimum=1,
+                        maximum=60,
+                        step=1
                     )
                     with gr.Row():
                         add_summaries_btn = gr.Button("📝 Add Summaries", variant="secondary")
@@ -658,9 +718,16 @@ def create_demo():
             # Scraping events
             scrape_btn.click(
                 fn=chat_app.start_scraping,
-                inputs=[url_input, store_db, scrape_progress, tqdm_status],
+                inputs=[
+                    url_input,
+                    store_db,
+                    use_cluster,  # Add the new checkbox to inputs
+                    scrape_progress,
+                    tqdm_status
+                ],
                 outputs=[scrape_progress, tqdm_status],
-                queue=True  # Enable queuing for streaming
+                queue=True,  # Enable queue for streaming updates
+                concurrency_limit=1  # Only allow one scraping job at a time
             )
         
             # Collection management events
@@ -684,13 +751,18 @@ def create_demo():
             # Database or LLM dropdown changes
             collections.change(
                 fn=chat_app.initialize_chat,
-                inputs=[collections, model],
-                outputs=[chatbot, gr.Markdown(), references],
+                inputs=[collections, model, rate_limit],
+                outputs=[chatbot, status_text, references]
             )
             model.change(
                 fn=chat_app.initialize_chat,
-                inputs=[collections, model],
-                outputs=[chatbot, gr.Markdown(), references],
+                inputs=[collections, model, rate_limit],
+                outputs=[chatbot, status_text, references]
+            )
+            rate_limit.change(
+                fn=chat_app.initialize_chat,
+                inputs=[collections, model, rate_limit],
+                outputs=[chatbot, status_text, references]
             )
 
             # Send message (button)
@@ -698,7 +770,8 @@ def create_demo():
                 fn=chat_app.chat,
                 inputs=[message, chatbot, collections, model],
                 outputs=[chatbot, references],
-                queue=True
+                queue=True,
+                concurrency_limit=None  # Allow unlimited chat concurrency since API handles rate limiting
             ).then(
                 fn=lambda: "",
                 outputs=message
@@ -709,7 +782,8 @@ def create_demo():
                 fn=chat_app.chat,
                 inputs=[message, chatbot, collections, model],
                 outputs=[chatbot, references],
-                queue=True
+                queue=True,
+                concurrency_limit=None  # Allow unlimited chat concurrency since API handles rate limiting
             ).then(
                 fn=lambda: "",
                 outputs=message

@@ -14,8 +14,7 @@
         }
     },
     "chat": {
-        "message_history_size": 15,
-        "rate_limit_rpm": 9,
+        "message_history_size": 29,
         "system_prompt": "You are a helpful expert assistant, answering questions based on the provided documentation. Always cite your sources using [number] format.",
         "rag_prompt": "Use ONLY the following documentation excerpts to answer the question. If you cannot answer based on these excerpts, say so.\n\nDOCUMENTATION EXCERPTS:\n{context}\n\nUSER QUESTION: {query}\n\nPlease provide a clear and concise answer, citing specific sources with [number] format. If multiple sources support a point, cite all of them.\nIf you cannot answer the question based on the provided context, say so clearly.",
         "models": {
@@ -25,6 +24,13 @@
                 "gemini/gemini-1.5-pro",
                 "gemini/gemini-2.0-flash-thinking-exp-1219",
                 "gemini/gemini-exp-1206",
+                "groq/llama-3.1-70b-versatile",
+                "groq/llama3-8b-8192",
+                "groq/llama-3.3-70b-versatile",
+                "mistral/mistral-medium-latest",
+                "mistral/mistral-large-latest",
+                "mistral/mistral-small-latest",
+                "mistral/open-mixtral-8x22b",
                 "gpt-4",
                 "claude-3"
             ],

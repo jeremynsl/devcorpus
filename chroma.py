@@ -3,6 +3,7 @@ from chromadb.config import Settings
 import logging
 from urllib.parse import urlparse
 from embeddings import EmbeddingManager
+from chunking import ChunkingManager
 
 logger = logging.getLogger("ChromaDB")
 logger.setLevel(logging.DEBUG)
@@ -24,6 +25,7 @@ class ChromaHandler:
     _client = None
     _collections = {}
     _embedding_manager = EmbeddingManager()
+    _chunking_manager = ChunkingManager()
     _db_path = None
     
     @classmethod
@@ -116,10 +118,24 @@ class ChromaHandler:
         # Merge with new metadata, preserving existing fields
         metadata = {**existing_metadata, "url": url}
         
+        # Chunk the text before adding to collection
+        chunks = self._chunking_manager.chunk_text(text)
+        if not chunks:  # If no chunks were created, use the original text
+            chunks = [text]
+            
+        # Create unique IDs for each chunk
+        chunk_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
+        chunk_metadatas = [{
+            **metadata,
+            "chunk_index": i,
+            "total_chunks": len(chunks),
+            "chunking_method": self._chunking_manager.get_chunking_method()
+        } for i in range(len(chunks))]
+        
         collection.upsert(
-            documents=[text],
-            ids=[doc_id],
-            metadatas=[metadata]
+            documents=chunks,
+            ids=chunk_ids,
+            metadatas=chunk_metadatas
         )
         
     def query(self, collection_name: str, query_text: str, n_results: int = 5) -> list[dict]:
