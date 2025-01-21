@@ -69,6 +69,23 @@ def test_get_collection_name():
         elif url.startswith(("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")):
             assert result == "collection_" + url.replace(".", "_")
 
+def test_get_collection_name_github():
+    """Test GitHub URL to collection name conversion"""
+    urls = [
+        # Repository URLs
+        ("https://github.com/owner/repo", "repo"),
+        ("https://github.com/owner/repo/", "repo"),
+        # File URLs
+        ("https://github.com/owner/repo/blob/main/file.py", "repo"),
+        ("https://github.com/owner/repo/blob/main/src/file.py", "repo"),
+        # Edge cases
+        ("https://github.com/owner/repo-name", "repo-name"),
+        ("https://github.com/owner/repo.js", "repo.js"),
+    ]
+    
+    for url, expected in urls:
+        assert ChromaHandler.get_collection_name(url) == expected
+
 def test_add_document(chroma_handler, mock_collection):
     """Test adding a document"""
     # Reset collection cache
@@ -82,6 +99,48 @@ def test_add_document(chroma_handler, mock_collection):
         chroma_handler.add_document("", "http://test.com")
         # Should still be called only once (empty content skipped)
         mock_collection.upsert.assert_called_once()
+
+def test_add_document_github(chroma_handler, mock_collection):
+    """Test adding GitHub file content without chunking"""
+    # Test GitHub file URL
+    github_url = "https://github.com/owner/repo/blob/main/file.py"
+    content = "def hello():\n    return 'world'"
+    
+    chroma_handler.add_document(content, github_url)
+    
+    # Verify the document was added without chunking
+    mock_collection.upsert.assert_called_once()
+    call_args = mock_collection.upsert.call_args[1]
+    
+    assert len(call_args["documents"]) == 1  # No chunks
+    assert call_args["documents"][0] == content
+    assert call_args["metadatas"][0]["url"] == github_url
+    assert "chunk_index" not in call_args["metadatas"][0]  # No chunking metadata
+
+def test_add_document_regular_vs_github(chroma_handler, mock_collection):
+    """Test different handling of regular vs GitHub content"""
+    # Regular web content should be chunked
+    web_url = "https://example.com/docs"
+    web_content = "A" * 2000  # Long content that would normally be chunked
+    
+    chroma_handler.add_document(web_content, web_url)
+    web_call = mock_collection.upsert.call_args[1]
+    
+    # GitHub content should not be chunked
+    mock_collection.reset_mock()
+    github_url = "https://github.com/owner/repo/blob/main/file.py"
+    github_content = "B" * 2000
+    
+    chroma_handler.add_document(github_content, github_url)
+    github_call = mock_collection.upsert.call_args[1]
+    
+    # Web content should have multiple chunks
+    assert len(web_call["documents"]) > 1
+    assert all("chunk_index" in meta for meta in web_call["metadatas"])
+    
+    # GitHub content should be a single document
+    assert len(github_call["documents"]) == 1
+    assert "chunk_index" not in github_call["metadatas"][0]
 
 def test_query(chroma_handler, mock_collection):
     """Test querying documents"""

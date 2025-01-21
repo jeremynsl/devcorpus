@@ -57,7 +57,15 @@ class ChromaHandler:
     def get_collection_name(cls, url: str) -> str:
         """Convert URL to a valid collection name."""
         parsed = urlparse(url)
-        # Use domain name as collection name, removing special characters
+        
+        # Handle GitHub URLs (both repository and blob URLs)
+        if "github.com" in parsed.netloc:
+            # Split path into components and get repository name
+            path_parts = [p for p in parsed.path.split("/") if p]
+            if len(path_parts) >= 2:  # Must have at least owner/repo
+                return path_parts[1]  # Use repository name
+        
+        # Use domain name as collection name for regular websites
         collection_name = parsed.netloc.replace(".", "_").replace("-", "_").replace(":", "_")
         
         # For non-URL inputs, use the raw input
@@ -118,19 +126,25 @@ class ChromaHandler:
         # Merge with new metadata, preserving existing fields
         metadata = {**existing_metadata, "url": url}
         
-        # Chunk the text before adding to collection
-        chunks = self._chunking_manager.chunk_text(text)
-        if not chunks:  # If no chunks were created, use the original text
+        # Skip chunking for GitHub files, use full file content
+        if "github.com" in url and "/blob/" in url:
             chunks = [text]
-            
-        # Create unique IDs for each chunk
-        chunk_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
-        chunk_metadatas = [{
-            **metadata,
-            "chunk_index": i,
-            "total_chunks": len(chunks),
-            "chunking_method": self._chunking_manager.get_chunking_method()
-        } for i in range(len(chunks))]
+            chunk_ids = [doc_id]
+            chunk_metadatas = [metadata]
+        else:
+            # Chunk the text before adding to collection
+            chunks = self._chunking_manager.chunk_text(text)
+            if not chunks:  # If no chunks were created, use the original text
+                chunks = [text]
+                
+            # Create unique IDs for each chunk
+            chunk_ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
+            chunk_metadatas = [{
+                **metadata,
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "chunking_method": self._chunking_manager.get_chunking_method()
+            } for i in range(len(chunks))]
         
         collection.upsert(
             documents=chunks,

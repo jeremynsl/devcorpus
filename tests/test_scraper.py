@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from scraper import (
     get_output_filename, remove_anchor, fetch_page, extract_links,
-     scrape_recursive
+     scrape_recursive, fetch_github_content, fetch_github_file
 )
 
 @pytest.fixture
@@ -42,6 +42,29 @@ def mock_proxies():
     import scraper
     scraper.proxies_list = []
     return scraper.proxies_list
+
+@pytest.fixture
+def mock_github_response():
+    """Create mock GitHub API responses"""
+    repo_info = {
+        "default_branch": "main"
+    }
+    
+    tree = {
+        "tree": [
+            {"path": "src/main.py", "type": "blob"},
+            {"path": "README.md", "type": "blob"},
+            {"path": "tests/test_main.py", "type": "blob"},
+            {"path": "docs/index.html", "type": "blob"},
+            {"path": ".gitignore", "type": "blob"}  # Should be filtered out
+        ]
+    }
+    
+    file_content = {
+        "content": "SGVsbG8gV29ybGQ="  # base64 encoded "Hello World"
+    }
+    
+    return repo_info, tree, file_content
 
 def test_get_output_filename():
     """Test URL to filename conversion"""
@@ -160,3 +183,132 @@ async def test_scrape_recursive():
         
         await run_with_timeout()
         assert m.called
+
+@pytest.mark.asyncio
+async def test_fetch_github_content(mock_github_response):
+    """Test fetching GitHub repository content"""
+    repo_info, tree, _ = mock_github_response
+    
+    # Create mock responses for both API calls
+    mock_repo_response = AsyncMock()
+    mock_repo_response.status = 200
+    mock_repo_response.json = AsyncMock(return_value=repo_info)
+    
+    mock_tree_response = AsyncMock()
+    mock_tree_response.status = 200
+    mock_tree_response.json = AsyncMock(return_value=tree)
+    
+    # Create mock context managers for session.get()
+    mock_repo_context = AsyncMock()
+    mock_repo_context.__aenter__ = AsyncMock(return_value=mock_repo_response)
+    mock_repo_context.__aexit__ = AsyncMock(return_value=None)
+    
+    mock_tree_context = AsyncMock()
+    mock_tree_context.__aenter__ = AsyncMock(return_value=mock_tree_response)
+    mock_tree_context.__aexit__ = AsyncMock(return_value=None)
+    
+    # Create a mock session
+    mock_session = AsyncMock()
+    mock_session.__aenter__.return_value = mock_session
+    mock_session.__aexit__.return_value = None
+    
+    # Mock the get method to return appropriate context based on URL
+    def mock_get(url, headers):
+        if "trees" in url:
+            return mock_tree_context
+        return mock_repo_context
+    mock_session.get = MagicMock(side_effect=mock_get)
+    
+    # Patch aiohttp.ClientSession to use our mock_session
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = await fetch_github_content("https://github.com/test/repo")
+        
+        assert result["owner"] == "test"
+        assert result["repo"] == "repo"
+        assert result["branch"] == "main"
+        assert len(result["files"]) == 4  # .gitignore should be filtered out
+        assert all(f["path"].endswith((".py", ".md", ".html")) for f in result["files"])
+
+@pytest.mark.asyncio
+async def test_fetch_github_file(mock_github_response):
+    """Test fetching a single GitHub file"""
+    _, _, file_content = mock_github_response
+    
+    # Create a mock response
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value=file_content)
+    
+    # Create mock context manager for session.get()
+    mock_get_context = AsyncMock()
+    mock_get_context.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_get_context.__aexit__ = AsyncMock(return_value=None)
+    
+    # Create a mock session
+    mock_session = AsyncMock()
+    mock_session.__aenter__.return_value = mock_session
+    mock_session.__aexit__.return_value = None
+    mock_session.get = MagicMock(return_value=mock_get_context)
+    
+    # Patch aiohttp.ClientSession to use our mock_session
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        content = await fetch_github_file("test", "repo", "src/main.py", {})
+        assert content == "Hello World"
+
+@pytest.mark.asyncio
+async def test_scrape_recursive_github(mock_github_response, mock_config):
+    """Test scraping a GitHub repository"""
+    repo_info, tree, file_content = mock_github_response
+    
+    # Create mock responses
+    mock_repo_response = AsyncMock()
+    mock_repo_response.status = 200
+    mock_repo_response.json = AsyncMock(return_value=repo_info)
+    
+    mock_tree_response = AsyncMock()
+    mock_tree_response.status = 200
+    mock_tree_response.json = AsyncMock(return_value=tree)
+    
+    mock_file_response = AsyncMock()
+    mock_file_response.status = 200
+    mock_file_response.json = AsyncMock(return_value=file_content)
+    
+    # Create mock context managers
+    mock_repo_context = AsyncMock()
+    mock_repo_context.__aenter__ = AsyncMock(return_value=mock_repo_response)
+    mock_repo_context.__aexit__ = AsyncMock(return_value=None)
+    
+    mock_tree_context = AsyncMock()
+    mock_tree_context.__aenter__ = AsyncMock(return_value=mock_tree_response)
+    mock_tree_context.__aexit__ = AsyncMock(return_value=None)
+    
+    mock_file_context = AsyncMock()
+    mock_file_context.__aenter__ = AsyncMock(return_value=mock_file_response)
+    mock_file_context.__aexit__ = AsyncMock(return_value=None)
+    
+    # Create a mock session
+    mock_session = AsyncMock()
+    mock_session.__aenter__.return_value = mock_session
+    mock_session.__aexit__.return_value = None
+    
+    # Mock get method to return appropriate context based on URL
+    def mock_get(url, headers):
+        if "trees" in url:
+            return mock_tree_context
+        if "contents" in url:
+            return mock_file_context
+        return mock_repo_context
+    mock_session.get = MagicMock(side_effect=mock_get)
+    
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        # Mock ChromaDB
+        with patch('scraper.ChromaHandler') as mock_chroma:
+            result = await scrape_recursive(
+                "https://github.com/test/repo",
+                mock_config["user_agent"],
+                mock_config["rate_limit"],
+                use_db=True
+            )
+            
+            assert "Successfully processed" in result
+            assert mock_chroma.return_value.add_document.call_count == 4  # One for each valid file
