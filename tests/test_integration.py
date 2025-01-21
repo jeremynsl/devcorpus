@@ -10,7 +10,7 @@ import sys
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-from main import scrape_recursive
+from scraper import scrape_recursive
 from chat import ChatInterface
 from chroma import ChromaHandler
 
@@ -110,9 +110,9 @@ async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_con
             )
         return response_gen()
 
-    with patch("main.fetch_page", side_effect=mock_fetch), \
+    with patch("scraper.fetch_page", side_effect=mock_fetch), \
          patch("llm_config.LLMConfig.get_response", side_effect=mock_llm_response), \
-         patch("main.CONFIG_FILE", test_config):
+         patch("config.CONFIG_FILE", test_config):
 
         # 1. Scrape documentation
         await scrape_recursive(
@@ -258,11 +258,11 @@ async def test_error_recovery(test_config, test_db):
             # Other exceptions should still be raised
             raise e
 
-    with patch("main.fetch_page", side_effect=mock_failing_fetch), \
-         patch("main.tqdm", return_value=mock_tqdm), \
+    with patch("scraper.fetch_page", side_effect=mock_failing_fetch), \
+         patch("scraper.tqdm", return_value=mock_tqdm), \
          patch("builtins.open", m), \
-         patch("main.watch_for_input", AsyncMock()), \
-         patch("main.is_paused_event.wait", AsyncMock()):  # Don't wait for pause event
+         patch("scraper.watch_for_input", AsyncMock()), \
+         patch("scraper.is_paused_event.wait", AsyncMock()):  # Don't wait for pause event
 
         # Run scraping with timeout
         await run_with_timeout()

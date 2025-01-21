@@ -7,7 +7,7 @@ import asyncio
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-from main import (
+from scraper import (
     get_output_filename, remove_anchor, fetch_page, extract_links,
      scrape_recursive
 )
@@ -39,9 +39,9 @@ def mock_html():
 @pytest.fixture
 def mock_proxies():
     """Mock global proxies list"""
-    import main
-    main.proxies_list = []
-    return main.proxies_list
+    import scraper
+    scraper.proxies_list = []
+    return scraper.proxies_list
 
 def test_get_output_filename():
     """Test URL to filename conversion"""
@@ -111,7 +111,7 @@ def test_extract_links(mock_html):
         ]
     }
     
-    with patch('main.extract_metadata', return_value=mock_metadata):
+    with patch('scraper.extract_metadata', return_value=mock_metadata):
         links = extract_links(
             mock_html,
             "http://example.com/start",
@@ -135,9 +135,9 @@ async def test_scrape_recursive():
     
     m = mock_open()
     with patch("builtins.open", m), \
-         patch("main.fetch_page", side_effect=mock_fetch), \
-         patch("main.tqdm"), \
-         patch("main.watch_for_input", AsyncMock()):
+         patch("scraper.fetch_page", side_effect=mock_fetch), \
+         patch("scraper.tqdm"), \
+         patch("scraper.watch_for_input", AsyncMock()):
         
         async def run_with_timeout():
             try:

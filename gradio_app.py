@@ -3,7 +3,9 @@
 import asyncio
 import gradio as gr
 from chat import ChatInterface
-from main import scrape_recursive, load_config, CONFIG_FILE, logger
+from logger import logger
+from config import CONFIG_FILE, load_config
+from scraper import scrape_recursive
 import logging
 from chroma import ChromaHandler
 from typing import List
@@ -482,22 +484,16 @@ def create_demo():
             color: var(--accent-color) !important;
             font-family: monospace;
             font-size: 0.9em;
-            opacity: 0.8;
-            margin: -8px 0 8px 0;
+            opacity: 0.8;            
             padding: 0 !important;
         }
-        
         
         /* Log display */
         .scraping-progress {
             font-family: monospace;
             white-space: pre-wrap;
-            padding: 16px;
-            background-color: var(--surface-color);
-            color: var(--text-color);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            height: 400px;
+            
+            height: 360px;
         }
         
         .scraping-progress::-webkit-scrollbar {
@@ -516,6 +512,7 @@ def create_demo():
         .scraping-progress::-webkit-scrollbar-thumb:hover {
             background: #666;
         }
+        
         
         /* Reference link styling */
         .reference-link {
@@ -617,9 +614,9 @@ def create_demo():
             )
             
             scrape_progress = gr.HTML(
-                label="Scraping Progress",
+                #label="Scraping Progress",
                 value="Progress will appear here...",
-                show_label=True,
+                show_label=False,
                 container=True,
                 elem_classes="scraping-progress",
             )
