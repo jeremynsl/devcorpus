@@ -2,14 +2,14 @@ from aiohttp import web
 
 
 class TestServer:
-    def __init__(self, host='127.0.0.1', port=8765):
+    def __init__(self, host="127.0.0.1", port=8765):
         self.host = host
         self.port = port
         self.app = web.Application()
-        self.app.router.add_get('/', self.handle_root)
-        self.app.router.add_get('/page1', self.handle_page1)
-        self.app.router.add_get('/page2', self.handle_page2)
-        self.app.router.add_get('/error', self.handle_error)
+        self.app.router.add_get("/", self.handle_root)
+        self.app.router.add_get("/page1", self.handle_page1)
+        self.app.router.add_get("/page2", self.handle_page2)
+        self.app.router.add_get("/error", self.handle_error)
         self.runner = None
         self.site = None
 
@@ -45,7 +45,9 @@ class TestServer:
                 </body>
             </html>
         """
-        return web.Response(text=html.strip(), content_type='text/html', charset='utf-8')
+        return web.Response(
+            text=html.strip(), content_type="text/html", charset="utf-8"
+        )
 
     async def handle_page1(self, request):
         html = """
@@ -73,7 +75,9 @@ class TestServer:
                 </body>
             </html>
         """
-        return web.Response(text=html.strip(), content_type='text/html', charset='utf-8')
+        return web.Response(
+            text=html.strip(), content_type="text/html", charset="utf-8"
+        )
 
     async def handle_page2(self, request):
         html = """
@@ -105,7 +109,9 @@ class TestServer:
                 </body>
             </html>
         """
-        return web.Response(text=html.strip(), content_type='text/html', charset='utf-8')
+        return web.Response(
+            text=html.strip(), content_type="text/html", charset="utf-8"
+        )
 
     async def handle_error(self, request):
         raise web.HTTPInternalServerError(text="Simulated server error")

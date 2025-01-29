@@ -10,12 +10,26 @@
                 "sentence-transformers/all-mpnet-base-v2",
                 "sentence-transformers/all-MiniLM-L6-v2"
             ],
-            "default": "avsolatorio/GIST-Embedding-v0"
+            "default": "avsolatorio/GIST-Embedding-v0",
+            "reranker": "cross-encoder/ms-marco-MiniLM-L-6-v2"
+        },
+        "retrieval": {
+            "initial_percent": 0.2,
+            "min_initial": 50,
+            "max_initial": 500
         }
     },
+    "chunking": {
+        "chunk_size": 200,
+        "max_chunk_size": 200,
+        "chunk_overlap": 0
+    },
     "chat": {
-        "message_history_size": 29,
-        "system_prompt": "You are a helpful expert assistant, answering questions based on the provided documentation. Always cite your sources using [number] format.",
+        "message_history_size": 10,
+        "max_retries": 3,
+        "retry_base_delay": 1,
+        "retry_max_delay": 30,
+        "system_prompt": "You are a helpful AI assistant that helps users find and understand information from web pages.",
         "rag_prompt": "Use ONLY the following documentation excerpts to answer the question. If you cannot answer based on these excerpts, say so.\n\nDOCUMENTATION EXCERPTS:\n{context}\n\nUSER QUESTION: {query}\n\nPlease provide a clear and concise answer, citing specific sources with [number] format. If multiple sources support a point, cite all of them.\nIf you cannot answer the question based on the provided context, say so clearly.",
         "models": {
             "available": [
@@ -32,9 +46,14 @@
                 "mistral/mistral-small-latest",
                 "mistral/open-mixtral-8x22b",
                 "gpt-4",
+                "openrouter/google/gemini-2.0-flash-thinking-exp:free",
                 "claude-3"
             ],
             "default": "gemini/gemini-1.5-flash"
         }
+    },
+    "scraping": {        
+        "chunk_size": 1000,
+        "overlap": 200
     }
 }

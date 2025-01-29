@@ -4,15 +4,16 @@ import shutil
 import asyncio
 from pathlib import Path
 import json
-from unittest.mock import patch, AsyncMock, MagicMock, mock_open
+from unittest.mock import patch, MagicMock, mock_open
 import sys
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
 
-from scraper import scrape_recursive
-from chat import ChatInterface
-from chroma import ChromaHandler
+from scraper_chat.scraper.scraper import scrape_recursive
+from scraper_chat.chat.chat_interface import ChatInterface
+from scraper_chat.database.chroma_handler import ChromaHandler
+
 
 @pytest.fixture(autouse=True)
 def setup_test_env(test_db):
@@ -22,6 +23,7 @@ def setup_test_env(test_db):
     yield
     # Reset to default after test
     ChromaHandler.configure(None)
+
 
 @pytest.fixture
 def test_config():
@@ -33,11 +35,8 @@ def test_config():
         "chat": {
             "message_history_size": 5,
             "system_prompt": "Test system prompt",
-            "models": {
-                "available": ["test-model"],
-                "default": "test-model"
-            }
-        }
+            "models": {"available": ["test-model"], "default": "test-model"},
+        },
     }
     config_path = "test_scraper_config.json"
     with open(config_path, "w") as f:
@@ -45,6 +44,7 @@ def test_config():
     yield config_path
     if os.path.exists(config_path):
         os.remove(config_path)
+
 
 @pytest.fixture
 def test_db():
@@ -64,6 +64,7 @@ def test_db():
     except (PermissionError, OSError):
         pass  # Directory might be locked, will be cleaned up later
 
+
 @pytest.fixture
 def mock_html_content():
     return {
@@ -80,13 +81,26 @@ def mock_html_content():
                 <p>More documentation content here.</p>
                 <a href="/page1">Back to Page 1</a>
             </body></html>
-        """
+        """,
     }
+
+
+@pytest.fixture
+def mock_config():
+    return {
+        "chat": {
+            "system_prompt": "Test system prompt",
+            "models": {"available": ["test-model"], "default": "test-model"},
+            "message_history_size": 10,
+            "rag_prompt": "Context:\n{context}\n\nQuestion: {query}",
+        }
+    }
+
 
 @pytest.mark.asyncio
 async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_content):
     """Test the full workflow: scraping, storing in DB, and chatting"""
-    
+
     # Mock HTTP responses
     async def mock_fetch(*args, **kwargs):
         url = args[0]
@@ -101,25 +115,23 @@ async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_con
         async def response_gen():
             yield MagicMock(
                 choices=[
-                    MagicMock(
-                        delta=MagicMock(
-                            content="Based on the documentation, "
-                        )
-                    )
+                    MagicMock(delta=MagicMock(content="Based on the documentation, "))
                 ]
             )
+
         return response_gen()
 
-    with patch("scraper.fetch_page", side_effect=mock_fetch), \
-         patch("llm_config.LLMConfig.get_response", side_effect=mock_llm_response), \
-         patch("config.CONFIG_FILE", test_config):
-
+    with (
+        patch("scraper_chat.scraper.scraper.fetch_page", side_effect=mock_fetch),
+        patch(
+            "scraper_chat.core.llm_config.LLMConfig.get_response",
+            side_effect=mock_llm_response,
+        ),
+        patch("scraper_chat.config.CONFIG_FILE", test_config),
+    ):
         # 1. Scrape documentation
         await scrape_recursive(
-            "http://test.com/page1",
-            "TestBot/1.0",
-            rate_limit=2,
-            use_db=True
+            "http://test.com/page1", "TestBot/1.0", rate_limit=2, use_db=True
         )
 
         # 2. Verify ChromaDB has content
@@ -132,17 +144,20 @@ async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_con
         # 3. Test chat interaction
         chat = ChatInterface([collection_name])
         responses = []
-        async for response, excerpts in chat.get_response("What is in the documentation?"):
+        async for response, excerpts in chat.get_response(
+            "What is in the documentation?"
+        ):
             responses.append(response)
             assert len(excerpts) > 0  # Should have relevant excerpts
-        
+
         assert len(responses) > 0
         assert "documentation" in " ".join(responses).lower()
+
 
 @pytest.mark.asyncio
 async def test_multi_collection_chat(test_config, test_db, mock_html_content):
     """Test chatting with multiple collections"""
-    
+
     # Mock LLM responses for different queries
     class AsyncLLMResponse:
         def __init__(self):
@@ -158,10 +173,10 @@ async def test_multi_collection_chat(test_config, test_db, mock_html_content):
                 )
             ]
             self.index = 0
-        
+
         def __aiter__(self):
             return self
-        
+
         async def __anext__(self):
             if self.index >= len(self.chunks):
                 raise StopAsyncIteration
@@ -174,19 +189,21 @@ async def test_multi_collection_chat(test_config, test_db, mock_html_content):
 
     # Mock ChromaDB query results
     mock_results1 = {
-        'documents': [["Documentation from source 1"]],
-        'metadatas': [[{"url": "http://test1.com"}]],
-        'distances': [[0.1]]
+        "documents": [["Documentation from source 1"]],
+        "metadatas": [[{"url": "http://test1.com"}]],
+        "distances": [[0.1]],
     }
-    
+
     mock_results2 = {
-        'documents': [["Documentation from source 2"]],
-        'metadatas': [[{"url": "http://test2.com"}]],
-        'distances': [[0.2]]
+        "documents": [["Documentation from source 2"]],
+        "metadatas": [[{"url": "http://test2.com"}]],
+        "distances": [[0.2]],
     }
 
-    with patch("llm_config.LLMConfig.get_response", side_effect=mock_llm_response):
-
+    with patch(
+        "scraper_chat.core.llm_config.LLMConfig.get_response",
+        side_effect=mock_llm_response,
+    ):
         # Create mock collections
         mock_collection1 = MagicMock()
         mock_collection1.query.return_value = mock_results1
@@ -198,35 +215,40 @@ async def test_multi_collection_chat(test_config, test_db, mock_html_content):
 
         # Mock ChromaHandler to return our mock collections
         with patch.object(ChromaHandler, "get_collection") as mock_get_collection:
+
             def get_collection_side_effect(name):
                 if name == "test_collection1":
                     return mock_collection1
                 return mock_collection2
+
             mock_get_collection.side_effect = get_collection_side_effect
 
             # Test chat with both collections
             chat = ChatInterface(["test_collection1", "test_collection2"])
             responses = []
             excerpts_seen = []
-            async for response, excerpts in chat.get_response("Show me all documentation"):
+            async for response, excerpts in chat.get_response(
+                "Show me all documentation"
+            ):
                 responses.append(response)
                 if excerpts:
                     excerpts_seen.extend(excerpts)
-            
+
             assert len(responses) > 0
             assert len(excerpts_seen) > 0
             combined_response = " ".join(responses).lower()
             assert "combined information" in combined_response
-            
+
             # Verify we got content from both collections
             urls = {excerpt.get("url") for excerpt in excerpts_seen}
             assert "http://test1.com" in urls
             assert "http://test2.com" in urls
 
+
 @pytest.mark.asyncio
-async def test_error_recovery(test_config, test_db):
+async def test_error_recovery(test_config, test_db, mock_config):
     """Test system recovery from various errors"""
-    
+
     # Test scraping with failing URLs
     async def mock_failing_fetch(*args, **kwargs):
         raise Exception("Network error")
@@ -239,7 +261,7 @@ async def test_error_recovery(test_config, test_db):
     mock_tqdm.format_dict = {"rate": 0}
 
     # Mock file operations
-    m = mock_open()
+    mock_file = mock_open(read_data=json.dumps(mock_config))
 
     # Create a timeout for the scraping
     async def run_with_timeout():
@@ -249,7 +271,7 @@ async def test_error_recovery(test_config, test_db):
                     "http://test.com/error",
                     "TestBot/1.0",
                     rate_limit=1,  # Use single worker for simpler testing
-                    use_db=True
+                    use_db=True,
                 )
         except asyncio.TimeoutError:
             # Expected timeout since failing fetches never complete
@@ -258,12 +280,14 @@ async def test_error_recovery(test_config, test_db):
             # Other exceptions should still be raised
             raise e
 
-    with patch("scraper.fetch_page", side_effect=mock_failing_fetch), \
-         patch("scraper.tqdm", return_value=mock_tqdm), \
-         patch("builtins.open", m), \
-         patch("scraper.watch_for_input", AsyncMock()), \
-         patch("scraper.is_paused_event.wait", AsyncMock()):  # Don't wait for pause event
-
+    with (
+        patch(
+            "scraper_chat.scraper.scraper.fetch_page", side_effect=mock_failing_fetch
+        ),
+        patch("scraper_chat.scraper.scraper.tqdm", return_value=mock_tqdm),
+        patch("builtins.open", mock_file),
+        patch("scraper_chat.config.CONFIG_FILE", test_config),
+    ):
         # Run scraping with timeout
         await run_with_timeout()
 
@@ -273,6 +297,7 @@ async def test_error_recovery(test_config, test_db):
 
         # Chat interface should handle empty results gracefully
         chat = ChatInterface(["test_collection"])
+
         responses = []
         async for response, excerpts in chat.get_response("test query"):
             responses.append(response)
