@@ -100,7 +100,7 @@ async def test_get_response_no_results(chat_interface, mock_chroma):
 async def test_get_response_with_excerpts(chat_interface):
     """Test response with excerpts"""
     async for response, excerpts in chat_interface.get_response(
-        "test", return_excerpts=True
+        "test",
     ):
         assert isinstance(response, str)
         assert isinstance(excerpts, list)

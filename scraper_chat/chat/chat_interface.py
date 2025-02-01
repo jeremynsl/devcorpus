@@ -1,10 +1,12 @@
-from typing import Union, Dict, List
+from typing import Union, Dict, List, Optional
 from dotenv import load_dotenv
 from scraper_chat.database.chroma_handler import ChromaHandler
 import logging
 from scraper_chat.core.llm_config import LLMConfig
 from scraper_chat.plan_mode.plan_mode import PlanModeExecutor
 from scraper_chat.config import load_config, CONFIG_FILE
+from typing import Any, AsyncGenerator, Tuple
+import re
 
 # Load environment variables
 load_dotenv()
@@ -13,7 +15,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def format_context(results: List[Dict]) -> str:
+def format_context(results: List[Dict[str, Any]]) -> str:
     """Format search results into context for the LLM."""
     if not results:
         return "No relevant documentation found."
@@ -21,17 +23,18 @@ def format_context(results: List[Dict]) -> str:
     context_parts = []
     for i, result in enumerate(results, 1):
         # Truncate text to a reasonable length while keeping it coherent
-        text = result["text"]
+        text = result.get("text")
         if len(text) > 2000:  # Limit each context chunk
             text = text[:2000] + "..."
 
         # Build context with metadata
-        context = [f"[{i}] Excerpt from {result['url']}"]
-        context.append(f"Relevance Score: {1 - result['distance']:.2f}")
+        context = [f"[{i}] Excerpt from {result.get('url', 'Unknown URL')}"]
+        context.append(f"Relevance Score: {1 - result.get('distance', 1.0):.2f}")
 
         # Add summary if available
-        if "metadata" in result and result["metadata"].get("summary"):
-            context.append(f"Summary: {result['metadata']['summary']}")
+        metadata = result.get("metadata", {})
+        if metadata.get("summary"):
+            context.append(f"Summary: {metadata['summary']}")
 
         context.append(f"Content: {text}")
         context_parts.append("\n".join(context))
@@ -42,12 +45,18 @@ def format_context(results: List[Dict]) -> str:
 def get_chat_prompt(query: str, context: str) -> str:
     """Create the RAG prompt for the LLM."""
     config = load_config(CONFIG_FILE)
-    rag_prompt = config["chat"]["rag_prompt"]
-    return rag_prompt.format(context=context, query=query)
+    rag_prompt = config["chat"].get(
+        "rag_prompt", "Context: {context}\nQuery: {query}\nResponse:"
+    )
+    return rag_prompt.replace("{context}", context).replace("{query}", query)
 
 
 class ChatInterface:
-    def __init__(self, collection_names: Union[str, List[str]], model: str = None):
+    _config = load_config(CONFIG_FILE)
+
+    def __init__(
+        self, collection_names: Union[str, List[str]], model: Optional[str] = None
+    ) -> None:
         """Initialize chat interface with ChromaDB collection(s)."""
         self.db = ChromaHandler()  # Initialize without collection
         self.collection_names = (
@@ -55,15 +64,18 @@ class ChatInterface:
             if isinstance(collection_names, str)
             else collection_names
         )
-        config = load_config(CONFIG_FILE)
         self.llm = LLMConfig(
-            model or config["chat"]["models"]["default"]
+            model or self._config["chat"]["models"]["default"]
         )  # Use provided model or default from config
         self.message_history = []  # Store message history
-        self.max_history = config["chat"]["message_history_size"]  # Get from config
-        logger.info(f"Using LLM model: {model or config['chat']['models']['default']}")
+        self.max_history = self._config["chat"][
+            "message_history_size"
+        ]  # Get from config
+        logger.info(
+            f"Using LLM model: {model or self._config['chat']['models']['default']}"
+        )
 
-    def _add_to_history(self, role: str, content: str):
+    def _add_to_history(self, role: str, content: str) -> None:
         """Add message to history and maintain max size"""
         message = {
             "role": role,
@@ -77,8 +89,10 @@ class ChatInterface:
             self.message_history = self.message_history[-self.max_history :]
 
     async def get_response(
-        self, query: str, n_results: int = 5, return_excerpts: bool = False
-    ):
+        self,
+        query: str,
+        n_results: int = 5,
+    ) -> AsyncGenerator[Tuple[str, List[Dict[str, Any]]], None]:
         """
         Process user query across all collections and stream responses.
         Yields tuples of (chunk, excerpts) where chunk is a piece of the response
@@ -93,7 +107,9 @@ class ChatInterface:
         # Search each collection
         for collection_name in self.collection_names:
             try:
-                results = self.db.query(collection_name, query, n_results=n_results)
+                results = (
+                    self.db.query(collection_name, query, n_results=n_results) or []
+                )
                 all_results.extend(results)
             except Exception as e:
                 logger.error(f"Error querying collection {collection_name}: {str(e)}")
@@ -102,9 +118,6 @@ class ChatInterface:
         if not all_results:
             yield ("No relevant information found in the selected documentation.", [])
             return
-
-        # Sort results by distance (lower is better)
-        # all_results.sort(key=lambda x: x['distance'])
 
         # Take top N results across all collections
         top_results = all_results[:n_results]
@@ -148,7 +161,6 @@ class ChatInterface:
                     # More robust parsing
                     try:
                         # Extract step number using regex
-                        import re
 
                         match = re.search(
                             r"\*\*Step\s*(\d+)\*\*:\s*(.+?)(?:\n|$)", content
@@ -188,16 +200,13 @@ class ChatInterface:
 
     async def plan_mode_chat(
         self, message: str, history: list, collections: list, model: str
-    ):
+    ) -> AsyncGenerator[Tuple[List[dict], str], None]:
         """
         Handle Plan Mode:
           1) LLM outlines a plan
           2) Iteratively retrieve docs and generate solutions for each plan step
           3) Stream partial outputs
         """
-        if not self:
-            # Initialize if not already done
-            self.initialize_chat(collections, model)
 
         step_history = self.get_step_history(history)
 

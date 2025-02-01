@@ -41,7 +41,7 @@ class RateLimiter:
     def get_status(self):
         now = time.time()
         return {
-            "current_rpm": self.current_rpm,
+            "rpm": self.rpm,
             "window_remaining": self.window_size - (now - self.request_times[0])
             if self.request_times
             else 0,

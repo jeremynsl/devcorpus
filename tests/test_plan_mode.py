@@ -126,10 +126,12 @@ async def test_plan_and_execute(plan_mode_executor):
     user_message = "Create a web application for task management"
 
     # Collect yielded values
-    yielded_values = []
-    async for chunk, _ in plan_mode_executor.plan_and_execute(user_message):
-        yielded_values.append(chunk)
+     # Collect yielded PlanOutput objects
+    yielded_outputs = []
+    async for output in plan_mode_executor.plan_and_execute(user_message):
+        # Now output is a PlanOutput instance
+        yielded_outputs.append(output)
 
     # Verify workflow
-    assert any("Execution Phase" in chunk for chunk in yielded_values)
-    assert any("Plan Execution Completed" in chunk for chunk in yielded_values)
+    assert any("Execution Phase" in output.message for output in yielded_outputs)
+    assert any("Plan Execution Completed" in output.message for output in yielded_outputs)

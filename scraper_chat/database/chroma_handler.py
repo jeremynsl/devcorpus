@@ -5,14 +5,22 @@ from urllib.parse import urlparse
 from scraper_chat.embeddings.embeddings import EmbeddingManager, Reranker
 from scraper_chat.chunking.chunking import ChunkingManager
 from scraper_chat.config.config import load_config, CONFIG_FILE
-
+from typing import TypedDict
+from threading import Lock
+from hashlib import blake2b
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
 # Default DB path, can be overridden for testing
 DEFAULT_DB_PATH = "docs_database.db"
 
-
+class QueryResult(TypedDict):
+    url: str
+    text: str
+    distance: float
+    metadata: dict
 class ChromaHandler:
     """Handler for ChromaDB operations with singleton pattern"""
 
@@ -22,6 +30,7 @@ class ChromaHandler:
     _embedding_manager = EmbeddingManager()
     _chunking_manager = ChunkingManager()
     _db_path = None
+    _lock = Lock()
 
     @classmethod
     def configure(cls, db_path: str = None):
@@ -37,6 +46,10 @@ class ChromaHandler:
     def get_db_path(cls):
         """Get the current DB path"""
         return cls._db_path or DEFAULT_DB_PATH
+    def get_database_size(cls) -> int:
+        """Get the current database size in bytes"""
+        db_path = Path(cls.get_db_path())
+        return sum(f.stat().st_size for f in db_path.glob('**/*') if f.is_file())
 
     @classmethod
     def reset(cls):
@@ -48,18 +61,23 @@ class ChromaHandler:
 
     def __new__(cls, collection_name: str = None):
         """Singleton pattern to ensure one database connection."""
-        if cls._instance is None:
-            instance = super(ChromaHandler, cls).__new__(cls)
-            instance._initialize()
-            cls._instance = instance
+        with cls._lock:
+            if cls._instance is None:
+                instance = super(ChromaHandler, cls).__new__(cls)
+                instance._initialize()
+                cls._instance = instance
         return cls._instance
 
     def _initialize(self):
         """Initialize the ChromaDB client"""
+        if hasattr(self, "_initialized"):
+            return
+        self._initialized = True
         if not ChromaHandler._client:
             ChromaHandler._client = chromadb.Client(
                 Settings(persist_directory=self.get_db_path(), is_persistent=True)
             )
+        self._initialized = True
 
     def __init__(self, collection_name: str = None):
         """
@@ -72,7 +90,7 @@ class ChromaHandler:
                 metadata={"description": "Scraped website content"},
             )
 
-    def get_collection(self, collection_name: str):
+    def get_collection(self, collection_name: str) -> chromadb.Collection:
         """Get or create a collection by name."""
         if collection_name not in self._collections:
             self._collections[collection_name] = self._client.get_or_create_collection(
@@ -81,20 +99,22 @@ class ChromaHandler:
             )
         return self._collections[collection_name]
 
-    def add_document(self, text: str, url: str):
+    def add_document(self, text: str, url: str) -> None:
         """
         Add a document to the collection with its URL as the ID.
         Handles duplicate URLs by using upsert.
         """
         if not text.strip():
             return
+        if not urlparse(url).scheme or not urlparse(url).netloc:
+            raise ValueError(f"Invalid URL: {url}")
 
         # Get collection name from URL
         collection_name = self.get_collection_name(url)
         collection = self.get_collection(collection_name)
 
-        # Use URL as ID but make it safe for ChromaDB
-        doc_id = url.replace("/", "_").replace(":", "_")
+        doc_hash = blake2b(url.encode(), digest_size=8).hexdigest()
+        doc_id = f"{doc_hash}"
 
         # Check for existing metadata
         existing_metadata = {}
@@ -130,12 +150,22 @@ class ChromaHandler:
                 }
                 for i in range(len(chunks))
             ]
-
+        existing = collection.get(where={"url": url})
+        if existing["ids"]:
+            collection.delete(ids=existing["ids"])
         collection.upsert(documents=chunks, ids=chunk_ids, metadatas=chunk_metadatas)
+    
+    def bulk_add_documents(self, documents: list[tuple[str, str]]) -> None:
+        with ThreadPoolExecutor() as executor:
+            executor.map(lambda doc: self.add_document(*doc), documents)
+
+    def clear_cache(self) -> None:
+        """Clear the ChromaDB cache."""
+        self._collections.clear()
 
     def query(
         self, collection_name: str, query_text: str, n_results: int = 5
-    ) -> list[dict]:
+    ) -> list[QueryResult]:
         """
         Query a specific collection and return results with their URLs.
         """
@@ -203,7 +233,7 @@ class ChromaHandler:
                         "metadata": metadata,
                     }
                 )
-                logger.info(f"Formatted result {idx}: {formatted_results[idx]}")
+                logger.info(f"Formatted result {formatted_results[-1]}")
             except Exception as e:
                 logger.error(f"Error formatting result {idx}: {str(e)}")
                 continue
@@ -243,6 +273,11 @@ class ChromaHandler:
         self, collection_name: str, doc_id: str, metadata_update: dict
     ):
         """Update metadata for a specific document in a collection."""
+        if not isinstance(metadata_update, dict):
+            raise TypeError("metadata_update must be a dictionary")
+        if any(k.startswith("_") for k in metadata_update.keys()):
+            raise ValueError("metadata_update keys cannot start with '_'")
+
         collection = self.get_collection(collection_name)
 
         # Get current metadata
@@ -258,7 +293,7 @@ class ChromaHandler:
         collection.update(ids=[doc_id], metadatas=[updated_metadata])
         return True
 
-    def get_all_documents(self, collection_name: str) -> list:
+    def get_all_documents(self, collection_name: str) -> list[dict]:
         """Get all documents from a collection with their IDs and metadata."""
         collection = self.get_collection(collection_name)
         return collection.get()
@@ -277,6 +312,7 @@ class ChromaHandler:
             logger.debug(
                 f"Found {len(results['metadatas'])} documents in {collection_name}"
             )
+            has_summary = False
             for i, metadata in enumerate(results["metadatas"]):
                 logger.debug(f"Document {i} metadata: {metadata}")
                 if metadata.get("summary"):

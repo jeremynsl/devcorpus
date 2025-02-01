@@ -31,7 +31,6 @@ class TestTextProcessor:
         assert "Social Sharing" not in preprocessed
         assert "Main Content" in preprocessed
 
-   
     def test_hash_text(self, text_processor):
         """Test text hashing is consistent and normalized"""
         text1 = "  Hello World  "

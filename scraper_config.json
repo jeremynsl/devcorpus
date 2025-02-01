@@ -1,6 +1,5 @@
 {
-    "proxies": [      
-    ],
+    "proxies": [],
     "rate_limit": 3,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "embeddings": {
@@ -52,7 +51,7 @@
             "default": "gemini/gemini-1.5-flash"
         }
     },
-    "scraping": {        
+    "scraping": {
         "chunk_size": 1000,
         "overlap": 200
     }

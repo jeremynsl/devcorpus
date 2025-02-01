@@ -1,69 +1,61 @@
 import asyncio
 import aiohttp
+from typing import Optional, List, Dict, Any
 from urllib.parse import urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 from trafilatura.core import extract_metadata
 from trafilatura import extract
-from ..text_processor import TextProcessor
 from tqdm import tqdm
+import os
+import base64
+from ..text_processor import TextProcessor
 from trafilatura.settings import use_config
 from ..database.chroma_handler import ChromaHandler
 from scraper_chat.logger.logging_config import logger
-import os
-import sys
-import logging
-import base64
 
 text_processor = TextProcessor()
 
 
 def normalize_url(url: str) -> str:
-    """Normalize URL by removing fragments and query parameters"""
+    """Normalize URL by removing fragments and query parameters."""
     parsed = urlparse(url)
-    return urlunparse(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            "",  # params
-            "",  # query
-            "",  # fragment
-        )
-    )
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
 
 def is_valid_url(url: str) -> bool:
-    """Check if URL is valid and uses http(s) scheme"""
+    """Check if URL is valid and uses http(s) scheme."""
     try:
         parsed = urlparse(url)
         return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-    except:
+    except Exception:  # Consider catching a more specific exception
         return False
 
 
 def get_domain(url: str) -> str:
-    """Extract domain from URL"""
+    """Extract domain from URL."""
     try:
         return urlparse(url).netloc
-    except:
+    except Exception:
         return ""
 
 
 def is_same_domain(url1: str, url2: str) -> bool:
-    """Check if two URLs belong to the same domain"""
+    """Check if two URLs belong to the same domain."""
     return get_domain(url1) == get_domain(url2)
 
 
 def should_follow_link(url: str, base_domain: str, base_path: str) -> bool:
-    """Determine if link should be followed based on domain and path restrictions"""
+    """
+    Determine if link should be followed based on domain and path restrictions.
+
+    Note: `base_domain` should be a full URL (or ensure it is normalized).
+    """
     if not is_valid_url(url):
         return False
 
-    # Must be same domain
     if not is_same_domain(url, base_domain):
         return False
 
-    # Must start with base path
     path = urlparse(url).path
     return path.startswith(base_path)
 
@@ -74,13 +66,10 @@ def get_output_filename(url: str) -> str:
     Example: https://svelte.dev/docs/ becomes svelte_dev.txt
     """
     parsed = urlparse(url)
-
-    # Get project root directory (two levels up from this file)
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     output_dir = os.path.join(root_dir, "scrapedtxt")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Use domain name as filename, removing special characters
     filename = parsed.netloc.replace(".", "_").replace("-", "_")
     if not filename:
         filename = "default"
@@ -91,8 +80,8 @@ def get_output_filename(url: str) -> str:
 # Proxy Failover
 ###############################################################################
 proxy_lock = asyncio.Lock()
-current_proxy_index = 0
-proxies_list = []  # Will be populated after loading config
+current_proxy_index: int = 0
+proxies_list: List[str] = []  # Will be populated after loading config
 
 
 def remove_anchor(url: str) -> str:
@@ -101,12 +90,11 @@ def remove_anchor(url: str) -> str:
     http://example.com/page#something == http://example.com/page
     """
     parsed = urlparse(url)
-    # Replace the fragment with an empty string
     parsed = parsed._replace(fragment="")
     return urlunparse(parsed)
 
 
-async def get_next_proxy():
+async def get_next_proxy() -> Optional[str]:
     """
     Returns the currently selected proxy from the proxies_list.
     If none exist, return None.
@@ -117,7 +105,7 @@ async def get_next_proxy():
         return proxies_list[current_proxy_index]
 
 
-async def switch_to_next_proxy():
+async def switch_to_next_proxy() -> None:
     """
     Rotate to the next proxy in proxies_list (for failover).
     """
@@ -137,40 +125,32 @@ async def fetch_page(url: str, user_agent: str) -> str:
     Attempt to fetch the given URL (HTML) with up to len(proxies_list) retries
     if proxies are available and we encounter certain HTTP errors (e.g., 403).
     """
-    max_retries = max(1, len(proxies_list) or 1)  # at least 1 attempt
-    attempts = 0
+    max_retries: int = max(1, len(proxies_list) or 1)
+    attempts: int = 0
 
     while attempts < max_retries:
         attempts += 1
-        proxy_url = await get_next_proxy()
+        proxy_url: Optional[str] = await get_next_proxy()
         logger.debug(f"Fetching {url} [Attempt {attempts}] (Proxy={proxy_url})")
 
-        # Prepare session initialization arguments
-        session_args = {
+        session_args: Dict[str, Any] = {
             "headers": {"User-Agent": user_agent},
             "timeout": aiohttp.ClientTimeout(total=30),
         }
-        # If a proxy URL is available, add it to the arguments
         if proxy_url:
             session_args["proxy"] = proxy_url
 
         try:
-            # Create session
             async with aiohttp.ClientSession(**session_args) as session:
-                # Fetch the page
                 response = await session.get(url)
-
-                # Attempt to get text content
                 try:
-                    content = await response.text()
+                    content: str = await response.text()
                 except Exception:
-                    # If text extraction fails, switch proxy
                     await switch_to_next_proxy()
                     if attempts < max_retries:
                         continue
                     raise
 
-                # Check for HTTP errors
                 if response.status in (403, 429):
                     logger.warning(
                         f"Received status {response.status} for {url}. "
@@ -185,16 +165,12 @@ async def fetch_page(url: str, user_agent: str) -> str:
                         status=response.status,
                     )
 
-                # Raise for other HTTP errors
                 response.raise_for_status()
-
-                # Return content
                 return content
 
         except aiohttp.ClientResponseError as e:
             logger.warning(
-                f"Received error for {url}. "
-                f"Switching proxy and retrying. (Attempt {attempts}/{max_retries})"
+                f"Received error for {url}. Switching proxy and retrying. (Attempt {attempts}/{max_retries})"
             )
             await switch_to_next_proxy()
             if attempts < max_retries:
@@ -208,33 +184,23 @@ async def fetch_page(url: str, user_agent: str) -> str:
                 continue
             raise
 
-    # If all attempts fail
     raise RuntimeError(f"Failed to fetch {url} after {max_retries} attempts")
 
 
-def extract_links(html: str, base_url: str, domain: str, start_path: str) -> list[str]:
+def extract_links(html: str, base_url: str, domain: str, start_path: str) -> List[str]:
     """
     Extract all in-domain links from the HTML.
-
-    Args:
-        html: HTML content to parse
-        base_url: URL of the current page
-        domain: Target domain to match (from urlparse(start_url).netloc)
-        start_path: Base path to constrain crawling (from urlparse(start_url).path)
     """
-    filtered_links = []
+    filtered_links: List[str] = []
 
-    # Ensure start_path ends with slash for prefix matching
     if not start_path.endswith("/"):
         start_path += "/"
 
-    # Try trafilatura first
     try:
         metadata = extract_metadata(html, default_url=base_url)
         if metadata:
             links = metadata.as_dict().get("links", [])
             if links:
-                # Handle nested lists from some trafilatura versions
                 if isinstance(links[0], list):
                     links = [item for sublist in links for item in sublist]
 
@@ -244,7 +210,6 @@ def extract_links(html: str, base_url: str, domain: str, start_path: str) -> lis
                         link_no_anchor = remove_anchor(absolute_link)
                         parsed_link = urlparse(link_no_anchor)
 
-                        # Validate both domain and path constraints
                         if parsed_link.netloc == domain and parsed_link.path.startswith(
                             start_path
                         ):
@@ -253,11 +218,10 @@ def extract_links(html: str, base_url: str, domain: str, start_path: str) -> lis
                         logger.error(f"Error processing link {link}: {str(e)}")
                         continue
 
-                return list(set(filtered_links))  # Deduplicate
+                return list(set(filtered_links))
     except Exception as e:
         logger.debug(f"Trafilatura link extraction failed: {str(e)}")
 
-    # Fallback to BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
     for a_tag in soup.find_all("a", href=True):
         try:
@@ -272,40 +236,32 @@ def extract_links(html: str, base_url: str, domain: str, start_path: str) -> lis
             logger.error(f"Error processing tag {a_tag}: {str(e)}")
             continue
 
-    return list(set(filtered_links))  # Deduplicate
+    return list(set(filtered_links))
 
 
 def html_to_markdown(html: str) -> str:
     """
     Convert HTML to Markdown text using trafilatura.
-    First remove boilerplate elements, then extract text.
     """
-    # Remove common boilerplate elements
-    cleaned_html = text_processor.preprocess_html(html)
-
-    # Configure trafilatura
+    cleaned_html: str = text_processor.preprocess_html(html)
     config = use_config()
     config.set("DEFAULT", "include_links", "False")
     config.set("DEFAULT", "include_formatting", "True")
     config.set("DEFAULT", "output_format", "markdown")
     config.set("DEFAULT", "extraction_timeout", "0")
 
-    # Try trafilatura first
-    text = extract(cleaned_html, config=config)
-
-    # Fall back to BeautifulSoup if needed
+    text: Optional[str] = extract(cleaned_html, config=config)
     if not text:
         logger.warning("Trafilatura extraction failed, falling back to BeautifulSoup")
         soup = BeautifulSoup(cleaned_html, "html.parser")
         text = soup.get_text(separator="\n", strip=True)
 
-    return text or ""  # Ensure we never return None
+    return text or ""
 
 
-async def fetch_github_content(url: str) -> dict:
+async def fetch_github_content(url: str) -> Dict[str, Any]:
     """
     Fetch content from a GitHub repository using the GitHub API.
-    Returns repository info including default branch and tree.
     """
     path = urlparse(url).path.strip("/")
     owner, repo = path.split("/")[:2]
@@ -317,7 +273,6 @@ async def fetch_github_content(url: str) -> dict:
     }
 
     async with aiohttp.ClientSession() as session:
-        # Get repository info and default branch
         async with session.get(
             f"https://api.github.com/repos/{owner}/{repo}", headers=headers
         ) as response:
@@ -327,7 +282,6 @@ async def fetch_github_content(url: str) -> dict:
             else:
                 raise Exception(f"Failed to get repository info: {response.status}")
 
-        # Get repository tree
         async with session.get(
             f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1",
             headers=headers,
@@ -362,7 +316,9 @@ async def fetch_github_content(url: str) -> dict:
                 raise Exception(f"Failed to get repository tree: {response.status}")
 
 
-async def fetch_github_file(owner: str, repo: str, path: str, headers: dict) -> str:
+async def fetch_github_file(
+    owner: str, repo: str, path: str, headers: Dict[str, str]
+) -> str:
     """Fetch a single file's content from GitHub."""
     async with aiohttp.ClientSession() as session:
         async with session.get(
@@ -378,196 +334,135 @@ async def fetch_github_file(owner: str, repo: str, path: str, headers: dict) -> 
 
 async def scrape_recursive(
     start_url: str, user_agent: str, rate_limit: int, use_db: bool = False
-):
+) -> str:
     """
     Recursively scrape all links from start_url domain.
-    Writes results incrementally to a file in the scrapedtxt directory.
-    If use_db is True, also stores content in ChromaDB.
     """
     if not start_url.startswith(("http://", "https://")):
         return "Error: Invalid URL. Must start with http:// or https://"
 
-    else:
-        # Check if it's a GitHub repository
-        if "github.com" in start_url and "/blob/" not in start_url:
-            logger.info(f"Detected GitHub repository URL: {start_url}")
-
-            # Initialize ChromaDB if requested
-            db_handler = None
-            if use_db:
-                collection_name = ChromaHandler.get_collection_name(start_url)
-                db_handler = ChromaHandler(collection_name)
-
-            # Get repository content
-            repo_info = await fetch_github_content(start_url)
-
-            # Create a progress bar for GitHub files
-            progress_bar = tqdm(
-                desc="Files Processed", unit="files", total=len(repo_info["files"])
-            )
-
-            # Process each file
-            headers = {
-                "Accept": "application/vnd.github.v3+json",
-                "User-Agent": "GitHubScraper",
-                "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
-            }
-
-            for file in repo_info["files"]:
-                try:
-                    content = await fetch_github_file(
-                        repo_info["owner"], repo_info["repo"], file["path"], headers
-                    )
-
-                    if content:
-                        file_url = (
-                            f"{start_url}/blob/{repo_info['branch']}/{file['path']}"
-                        )
-
-                        # Store in ChromaDB if enabled
-                        if db_handler:
-                            db_handler.add_document(content, file_url)
-
-                        # Update progress
-                        progress_bar.update(1)
-                        logger.info(f"Processed: {file['path']}")
-
-                except Exception as e:
-                    logger.error(f"Error processing {file['path']}: {str(e)}")
-                    continue
-
-            progress_bar.close()
-            return f"Successfully processed {len(repo_info['files'])} files from GitHub repository"
-
-        # Regular website scraping
-        output_file = get_output_filename(start_url)
-        domain = urlparse(start_url).netloc
-
-        start_path = urlparse(start_url).path
-        if not start_path:
-            start_path = "/"
-
-        visited = set()
-        to_visit = asyncio.Queue()
-
-        # Initialize ChromaDB if requested
-        db_handler = None
+    if "github.com" in start_url and "/blob/" not in start_url:
+        logger.info(f"Detected GitHub repository URL: {start_url}")
+        db_handler: Optional[ChromaHandler] = None
         if use_db:
-            # Get collection name from URL
             collection_name = ChromaHandler.get_collection_name(start_url)
             db_handler = ChromaHandler(collection_name)
-
-        # Put the initial URL in the queue
-        await to_visit.put(remove_anchor(start_url))
-
-        # Rate limiter (max concurrency)
-        semaphore = asyncio.Semaphore(rate_limit)
-
-        # Create a progress bar (indeterminate total)
-        progress_bar = tqdm(desc="Pages Scraped", unit="pages", total=0)
-
-        def update_progress():
-            """Log the current progress"""
-            logger.info(
-                f"Pages Scraped: {progress_bar.n} pages [{progress_bar.format_dict['rate']:.2f} pages/s]"
-            )
-
-        # We'll keep the file open in "append" mode the entire time
-        # to write incrementally
-        file_handle = open(output_file, "w", encoding="utf-8")
-        file_handle.write(f"Start scraping: {start_url}\n\n")
-
-        async def worker():
+        repo_info = await fetch_github_content(start_url)
+        progress_bar = tqdm(
+            desc="Files Processed", unit="files", total=len(repo_info["files"])
+        )
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "GitHubScraper",
+            "Authorization": f"token {os.getenv('GITHUB_TOKEN')}",
+        }
+        for file in repo_info["files"]:
             try:
-                while True:
-                    try:
-                        url = await to_visit.get()
-                    except asyncio.CancelledError:
-                        # Mark the task as done before exiting
-                        if not to_visit.empty():
-                            to_visit.task_done()
-                        raise  # Re-raise to properly handle cancellation
-                    except asyncio.QueueEmpty:
-                        break
-
-                    try:
-                        if url in visited:
-                            to_visit.task_done()
-                            continue
-
-                        visited.add(url)
-                        logger.info(f"Scraping: {url}")
-
-                        async with semaphore:
-                            html = await fetch_page(url, user_agent)
-
-                        if html:
-                            # Convert HTML to text
-                            text = html_to_markdown(html)
-                            if text:
-                                # Write incrementally to file
-                                file_handle.write(f"URL: {url}\n")
-                                file_handle.write(text)
-                                file_handle.write("\n\n---\n\n")
-                                file_handle.flush()
-
-                                # Store in ChromaDB if enabled
-                                if db_handler:
-                                    db_handler.add_document(text, url)
-                                    logging.debug(f"Storedin ChromaDB: {url}")
-
-                            # Extract new links
-                            links = extract_links(html, url, domain, start_path)
-                            logging.debug(f"Extracted links: {links}")
-                            for link in links:
-                                if link not in visited:
-                                    await to_visit.put(link)
-
-                            # Update progress
-                            progress_bar.update(1)
-                            update_progress()
-
-                        to_visit.task_done()
-                    except Exception as e:
-                        logger.error(f"Error processing {url}: {e}")
-                        to_visit.task_done()  # Always mark task as done even on error
-                        continue  # Continue to next URL instead of crashing worker
-            except asyncio.CancelledError:
-                # Handle final cleanup on cancellation
-                logger.info("Worker cancelled, cleaning up...")
-                raise
+                content = await fetch_github_file(
+                    repo_info["owner"], repo_info["repo"], file["path"], headers
+                )
+                if content:
+                    file_url = f"{start_url}/blob/{repo_info['branch']}/{file['path']}"
+                    if db_handler:
+                        db_handler.add_document(content, file_url)
+                    progress_bar.update(1)
+                    logger.info(f"Processed: {file['path']}")
             except Exception as e:
-                logger.error(f"Worker error: {e}")
-                raise
+                logger.error(f"Error processing {file['path']}: {str(e)}")
+                continue
+        progress_bar.close()
+        return f"Successfully processed {len(repo_info['files'])} files from GitHub repository"
 
-        # Create multiple workers
-        tasks = []
+    output_file = get_output_filename(start_url)
+    domain: str = urlparse(start_url).netloc
+    start_path: str = urlparse(start_url).path or "/"
+    visited: set[str] = set()
+    to_visit: asyncio.Queue[str] = asyncio.Queue()
+    db_handler: Optional[ChromaHandler] = None
+    if use_db:
+        collection_name = ChromaHandler.get_collection_name(start_url)
+        db_handler = ChromaHandler(collection_name)
+    await to_visit.put(remove_anchor(start_url))
+    semaphore = asyncio.Semaphore(rate_limit)
+    progress_bar = tqdm(desc="Pages Scraped", unit="pages", total=0)
+
+    def update_progress() -> None:
+        logger.info(
+            f"Pages Scraped: {progress_bar.n} pages [{progress_bar.format_dict.get('rate', 0):.2f} pages/s]"
+        )
+
+    file_handle = open(output_file, "w", encoding="utf-8")
+    file_handle.write(f"Start scraping: {start_url}\n\n")
+
+    async def worker() -> None:
         try:
-            for _ in range(rate_limit):
-                t = asyncio.create_task(worker())
-                tasks.append(t)
-
-            # Wait for the queue to empty
-            await to_visit.join()
-        except Exception as e:
-            logger.error(f"Error during scraping: {e}")
-            raise
-        finally:
-            # Cancel all workers
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
-
-            # Wait for all tasks to complete their cancellation
-            if tasks:
+            while True:
                 try:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    url = await to_visit.get()
+                except asyncio.CancelledError:
+                    if not to_visit.empty():
+                        to_visit.task_done()
+                    raise
+                except asyncio.QueueEmpty:
+                    break
+
+                try:
+                    if url in visited:
+                        to_visit.task_done()
+                        continue
+
+                    visited.add(url)
+                    logger.info(f"Scraping: {url}")
+                    async with semaphore:
+                        html = await fetch_page(url, user_agent)
+                    if html:
+                        text = html_to_markdown(html)
+                        if text:
+                            file_handle.write(f"URL: {url}\n{text}\n\n---\n\n")
+                            file_handle.flush()
+                            if db_handler:
+                                db_handler.add_document(text, url)
+                                logger.debug(f"Stored in ChromaDB: {url}")
+                        links = extract_links(html, url, domain, start_path)
+                        logger.debug(f"Extracted links: {links}")
+                        for link in links:
+                            if link not in visited:
+                                await to_visit.put(link)
+                        progress_bar.update(1)
+                        update_progress()
+                    to_visit.task_done()
                 except Exception as e:
-                    logger.error(f"Error during worker cleanup: {e}")
+                    logger.error(f"Error processing {url}: {e}")
+                    to_visit.task_done()
+                    continue
+        except asyncio.CancelledError:
+            logger.info("Worker cancelled, cleaning up...")
+            raise
+        except Exception as e:
+            logger.error(f"Worker error: {e}")
+            raise
 
-            # Close progress bar and file
-            progress_bar.close()
-            file_handle.write("Scraping completed.\n")
-            file_handle.close()
+    tasks: List[asyncio.Task] = []
+    try:
+        for _ in range(rate_limit):
+            t = asyncio.create_task(worker())
+            tasks.append(t)
+        await to_visit.join()
+    except Exception as e:
+        logger.error(f"Error during scraping: {e}")
+        raise
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        if tasks:
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                logger.error(f"Error during worker cleanup: {e}")
+        progress_bar.close()
+        file_handle.write("Scraping completed.\n")
+        file_handle.close()
+        logger.info("Scraping completed.")
 
-            logger.info("Scraping completed.")
+    return "Scraping completed successfully."

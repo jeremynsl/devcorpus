@@ -1,8 +1,20 @@
-import logging
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, List, AsyncGenerator
 from scraper_chat.database.chroma_handler import ChromaHandler
 from scraper_chat.core.llm_config import LLMConfig
 
-logger = logging.getLogger(__name__)
+@dataclass
+class PlanOutput:
+    """
+    A standardized output message for plan and execution steps.
+    
+    Attributes:
+        message: The content of the message.
+        metadata: Optional dictionary containing extra context,
+                  such as the phase of the process or the step number.
+    """
+    message: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class PlanModeExecutor:
@@ -13,16 +25,17 @@ class PlanModeExecutor:
     """
 
     def __init__(self, collections, model):
+        
+
         self.db = ChromaHandler()
         self.collections = collections
         self.llm = LLMConfig(model)
 
-    async def generate_plan(self, user_message: str):
+    async def generate_plan(self, user_message: str) -> AsyncGenerator[str, None]:
         """
         Ask the LLM for a high-level plan, using RAG context from relevant docs.
         Yields raw plan text chunks that form a JSON array.
         """
-        # First get relevant docs based on user message
         query_prompt = f"""Generate 1 concise search query to find relevant documentation for this request:
 
 Request: "{user_message}"
@@ -40,7 +53,6 @@ Your query:"""
             if chunk.choices and chunk.choices[0].delta.content:
                 query += chunk.choices[0].delta.content
 
-        # Get relevant docs using the query
         docs = self.retrieve_docs(query.strip())
         docs_context = "\n\n".join([doc["text"] for doc in docs])
 
@@ -61,83 +73,66 @@ IMPORTANT: produce the plan in valid JSON with the format:
 
 DO NOT include any extra fields or text outside the JSON.
 """
-        logger.info("Generating high-level plan with RAG context...")
+        self._logger_info("Generating high-level plan with RAG context...")
         response_stream = await self.llm.get_response(plan_prompt, stream=True)
-
         async for chunk in response_stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content  # Stream individual tokens
 
-    def parse_plan(self, plan_text: str) -> list:
+    def parse_plan(self, plan_text: str) -> List[str]:
         """
-        Parse the JSON plan text into a list of steps.
-        Validates that the plan has a reasonable number of steps and proper structure.
-
-        Returns:
-            list: List of step descriptions
-
-        Raises:
-            ValueError: If plan is empty or has too many steps
+        Parse the JSON plan text into a list of step descriptions.
         """
         import json
 
         MIN_STEPS = 1
-        MAX_STEPS = 10  # Reasonable upper limit for a plan
+        MAX_STEPS = 10
 
         try:
             plan_data = json.loads(plan_text)
-
-            # Validate it's a list
             if not isinstance(plan_data, list):
-                logger.error("Plan data is not a list")
+                self._logger_error("Plan data is not a list")
                 raise ValueError("Invalid plan format: expected a list of steps")
-
-            # Validate number of steps
             if len(plan_data) < MIN_STEPS:
-                logger.error("Plan has no steps")
+                self._logger_error("Plan has no steps")
                 raise ValueError("Plan must have at least one step")
             if len(plan_data) > MAX_STEPS:
-                logger.warning(
+                self._logger_warning(
                     f"Plan has too many steps ({len(plan_data)}), truncating to {MAX_STEPS}"
                 )
                 plan_data = plan_data[:MAX_STEPS]
 
-            # Extract and validate each step
             steps = []
             for step in plan_data:
                 if not isinstance(step, dict) or "description" not in step:
-                    logger.error(f"Invalid step format: {step}")
+                    self._logger_error(f"Invalid step format: {step}")
                     continue
                 if not step["description"].strip():
-                    logger.error("Empty step description")
+                    self._logger_error("Empty step description")
                     continue
                 steps.append(step["description"])
 
             if not steps:
                 raise ValueError("No valid steps found in plan")
-
             return steps
 
         except json.JSONDecodeError:
-            logger.error("Failed to parse plan JSON, falling back to text parsing")
-            # Fallback to text parsing with validation
+            self._logger_error("Failed to parse plan JSON, falling back to text parsing")
             steps = []
             for line in plan_text.split("\n"):
                 line = line.strip()
                 if line and (line[0].isdigit() or line.startswith("-")):
                     steps.append(line)
-
             if not steps:
                 raise ValueError("No valid steps found in plan text")
             if len(steps) > MAX_STEPS:
-                logger.warning(
+                self._logger_warning(
                     f"Plan has too many steps ({len(steps)}), truncating to {MAX_STEPS}"
                 )
                 steps = steps[:MAX_STEPS]
-
             return steps
 
-    async def generate_docs_query(self, step: str) -> str:
+    async def generate_docs_query(self, step: str) -> AsyncGenerator[str, None]:
         """
         For each step, produce a short doc-search query.
         """
@@ -152,23 +147,16 @@ Guidelines:
 4. Use OR between alternative phrasings
 5. Prioritize code examples and official docs
 
-Examples:
-Good: "svelte calendar component day view example OR sveltekit grid layout weekly calendar"
-Bad: "how to make calendar"
-
 Your queries:
 """
         response_stream = await self.llm.get_response(prompt, stream=True)
-
         async for chunk in response_stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
+                yield chunk.choices[0].delta.content
 
-                yield content  # Stream query tokens
-
-    def retrieve_docs(self, query_text: str, n_results=5) -> list:
+    def retrieve_docs(self, query_text: str, n_results: int = 5) -> List[dict]:
         """
-        Use the existing Chroma-based RAG to retrieve docs from each selected collection.
+        Retrieve documents using the Chroma-based RAG mechanism.
         """
         all_results = []
         for coll in self.collections:
@@ -176,25 +164,25 @@ Your queries:
                 results = self.db.query(coll, query_text, n_results=n_results)
                 all_results.extend(results)
             except Exception as e:
-                logger.error(f"Error querying collection {coll}: {str(e)}")
+                self._logger_error(f"Error querying collection {coll}: {str(e)}")
         all_results.sort(key=lambda x: x["distance"])
         top_results = all_results[:n_results]
-        logger.debug("\n🔍 Final documents selected:")
+        self._logger_debug("Final documents selected:")
         for i, doc in enumerate(top_results, 1):
             url = doc.get("metadata", {}).get("url", "No URL available")
             relevance = 1 - doc["distance"]
-            logger.debug(f"  {i}. {url} (Relevance: {relevance:.2f})")
+            self._logger_debug(f"  {i}. {url} (Relevance: {relevance:.2f})")
         return top_results
 
-    async def generate_solution_for_step(self, step: str, docs: list, history: list):
+    async def generate_solution_for_step(self, step: str, docs: List[dict], history: List[dict]) -> AsyncGenerator[str, None]:
         """
-        Given a single plan step and relevant docs, generate some code or text output.
+        Given a plan step and relevant docs, generate the solution output.
         """
         previous_steps = "\n".join(
             f"Step {s['step_number']}: {s['description']}\n"
             f"Used Query: {s['query']}\n"
             f"Solution: {s['solution']}\n"
-            for s in history[:-1]  # Exclude current step
+            for s in history[:-1]
         )
         doc_context_parts = []
         for i, doc in enumerate(docs, start=1):
@@ -202,7 +190,7 @@ Your queries:
             if len(snippet) > 1000:
                 snippet = snippet[:1000] + "..."
             doc_context_parts.append(
-                f"[{i}] from {doc['url']}\nRelevance: {1 - doc['distance']:.2f}\n\n{snippet}"
+                f"[{i}] from {doc.get('metadata', {}).get('url', 'No URL available')}\nRelevance: {1 - doc['distance']:.2f}\n\n{snippet}"
             )
         doc_context = (
             "\n\n---\n\n".join(doc_context_parts)
@@ -223,18 +211,15 @@ And here are some relevant documentation excerpts:
 
 Using the above info, produce code or text that addresses this step:
 """
-
         response_stream = await self.llm.get_response(prompt, stream=True)
-
         async for chunk in response_stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
+                yield chunk.choices[0].delta.content
 
-                yield content  # Stream solution tokens
-
-    async def plan_and_execute(self, user_message: str, previous_steps: list = None):
+    async def plan_and_execute(self, user_message: str, previous_steps: Optional[List[dict]] = None) -> AsyncGenerator[PlanOutput, None]:
         """
-        Orchestrate Plan Mode with proper history tracking
+        Orchestrate Plan Mode with proper history tracking.
+        Yields PlanOutput objects for each piece of output.
         """
         step_history = previous_steps if previous_steps else []
 
@@ -242,15 +227,19 @@ Using the above info, produce code or text that addresses this step:
         plan_chunks = []
         async for chunk in self.generate_plan(user_message):
             plan_chunks.append(chunk)
-            yield chunk, None
+            yield PlanOutput(
+                message=chunk,
+                metadata={"phase": "plan_generation"}
+            )
 
         parsed_plan = self.parse_plan("".join(plan_chunks))
-
-        yield "\n\n **Execution Phase**\n", None
+        yield PlanOutput(
+            message="\n\n **Execution Phase**\n",
+            metadata={"phase": "phase_transition"}
+        )
 
         # Phase 2: Step Execution
         for step_number, step in enumerate(parsed_plan, start=1):
-            # Initialize step tracking
             current_step = {
                 "step_number": step_number,
                 "description": step.strip(),
@@ -258,31 +247,59 @@ Using the above info, produce code or text that addresses this step:
                 "solution": None,
             }
             step_history.append(current_step)
-
-            # Step Header
-            yield f"\n\n---\n**Step {step_number}**: {step}\n", None
+            # Yield step header
+            yield PlanOutput(
+                message=f"\n\n---\n**Step {step_number}**: {step}\n",
+                metadata={"phase": "step_header", "step": step_number}
+            )
 
             # Query Generation
-            yield "🔍 *Searching docs...*\n", None
+            yield PlanOutput(
+                message="🔍 *Searching docs...*\n",
+                metadata={"phase": "query_generation", "step": step_number}
+            )
             query_chunks = []
             async for chunk in self.generate_docs_query(step):
                 query_chunks.append(chunk)
-                yield chunk, None
-
-            # Update and store query
+                yield PlanOutput(
+                    message=chunk,
+                    metadata={"phase": "query_generation", "step": step_number}
+                )
             current_step["query"] = "".join(query_chunks).strip()
             relevant_docs = self.retrieve_docs(current_step["query"])
 
-            # Solution Generation with full history
-            yield "\n💡 *Generating solution...*\n", None
+            # Solution Generation
+            yield PlanOutput(
+                message="\n💡 *Generating solution...*\n",
+                metadata={"phase": "solution_generation", "step": step_number}
+            )
             solution_chunks = []
-            async for chunk in self.generate_solution_for_step(
-                step, relevant_docs, step_history
-            ):
+            async for chunk in self.generate_solution_for_step(step, relevant_docs, step_history):
                 solution_chunks.append(chunk)
-                yield chunk, None
-
-            # Store final solution
+                yield PlanOutput(
+                    message=chunk,
+                    metadata={"phase": "solution_generation", "step": step_number}
+                )
             current_step["solution"] = "".join(solution_chunks).strip()
 
-        yield "\n\n✅ **Plan Execution Completed**", None
+        yield PlanOutput(
+            message="\n\n✅ **Plan Execution Completed**",
+            metadata={"phase": "completion"}
+        )
+
+    # Internal logging helpers for consistency
+    def _logger_info(self, msg: str):
+        import logging
+        logging.getLogger(__name__).info(msg)
+
+    def _logger_error(self, msg: str):
+        import logging
+        logging.getLogger(__name__).error(msg)
+
+    def _logger_warning(self, msg: str):
+        import logging
+        logging.getLogger(__name__).warning(msg)
+
+    def _logger_debug(self, msg: str):
+        import logging
+        logging.getLogger(__name__).debug(msg)
