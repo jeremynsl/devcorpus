@@ -10,6 +10,7 @@ from threading import Lock
 from hashlib import blake2b
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
@@ -116,6 +117,9 @@ class ChromaHandler:
         doc_hash = blake2b(url.encode(), digest_size=8).hexdigest()
         doc_id = f"{doc_hash}"
 
+        # Generate content hash
+        content_hash = blake2b(text.encode(), digest_size=16).hexdigest()
+
         # Check for existing metadata
         existing_metadata = {}
         try:
@@ -126,7 +130,12 @@ class ChromaHandler:
             pass
 
         # Merge with new metadata, preserving existing fields
-        metadata = {**existing_metadata, "url": url}
+        metadata = {
+            **existing_metadata, 
+            "url": url,
+            "content_hash": content_hash,
+            "last_updated": datetime.now().isoformat()
+        }
 
         # Skip chunking for GitHub files, use full file content
         if "github.com" in url and "/blob/" in url:
@@ -323,6 +332,41 @@ class ChromaHandler:
 
         except Exception as e:
             logger.error(f"Error checking summaries for {collection_name}: {str(e)}")
+            return False
+
+    def has_matching_content(self, url: str, content: str) -> bool:
+        """
+        Check if a URL exists in the database and has matching content.
+        
+        Args:
+            url: The URL to check
+            content: The content to compare against
+            
+        Returns:
+            bool: True if URL exists and content matches, False otherwise
+        """
+        try:
+            collection_name = self.get_collection_name(url)
+            collection = self.get_collection(collection_name)
+            
+            # Generate hash for the new content
+            new_content_hash = blake2b(content.encode(), digest_size=16).hexdigest()
+            
+            # Get document by URL from metadata
+            results = collection.get(
+                where={"url": url},
+                include=["metadatas"]
+            )
+            
+            if not results["ids"]:
+                return False
+                
+            # Check if content hash matches
+            existing_hash = results["metadatas"][0].get("content_hash")
+            return existing_hash == new_content_hash
+            
+        except Exception as e:
+            logger.debug(f"Error checking content match: {e}")
             return False
 
     @classmethod

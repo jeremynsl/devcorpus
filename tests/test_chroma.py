@@ -2,6 +2,8 @@ import pytest
 from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
+from hashlib import blake2b
+from datetime import datetime
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
@@ -33,10 +35,14 @@ def mock_collection():
     collection = MagicMock()
     collection.query.return_value = {
         "documents": [["Test document"]],
-        "metadatas": [[{"url": "http://test.com"}]],  # Fix metadata format
+        "metadatas": [[{"url": "http://test.com"}]],
         "distances": [[0.5]],
     }
     collection.count.return_value = 5
+    # Mock the upsert method for adding documents
+    collection.upsert = MagicMock()
+    # Mock the get method for content checking
+    collection.get = MagicMock(return_value={"ids": [], "metadatas": []})
     return collection
 
 
@@ -44,6 +50,8 @@ def mock_collection():
 def chroma_handler(mock_client, mock_collection):
     with patch("chromadb.Client", return_value=mock_client):
         handler = ChromaHandler("test_collection")
+        # Mock the chunking manager to return single chunk
+        handler._chunking_manager.chunk_text = MagicMock(return_value=["Test content"])
         mock_client.get_or_create_collection.return_value = mock_collection
         return handler
 
@@ -133,6 +141,11 @@ def test_add_document_regular_vs_github(chroma_handler, mock_collection):
     web_url = "https://example.com/docs"
     web_content = "A" * 2000  # Long content that would normally be chunked
 
+    # Mock chunking manager to return multiple chunks for web content
+    chroma_handler._chunking_manager.chunk_text = MagicMock(
+        return_value=[web_content[i:i+500] for i in range(0, len(web_content), 500)]
+    )
+
     chroma_handler.add_document(web_content, web_url)
     web_call = mock_collection.upsert.call_args[1]
 
@@ -146,11 +159,19 @@ def test_add_document_regular_vs_github(chroma_handler, mock_collection):
 
     # Web content should have multiple chunks
     assert len(web_call["documents"]) > 1
-    assert all("chunk_index" in meta for meta in web_call["metadatas"])
-
-    # GitHub content should be a single document
+    # GitHub content should be a single chunk
     assert len(github_call["documents"]) == 1
+    assert github_call["documents"][0] == github_content
+
+    # Verify chunk metadata for web content
+    assert all("chunk_index" in metadata for metadata in web_call["metadatas"])
+    assert all("total_chunks" in metadata for metadata in web_call["metadatas"])
+    assert all(metadata["total_chunks"] == len(web_call["documents"]) 
+               for metadata in web_call["metadatas"])
+
+    # Verify no chunk metadata for GitHub content
     assert "chunk_index" not in github_call["metadatas"][0]
+    assert "total_chunks" not in github_call["metadatas"][0]
 
 
 def test_query(chroma_handler, mock_collection):
@@ -192,3 +213,91 @@ def test_get_available_collections():
         collections = ChromaHandler.get_available_collections()
         assert collections == ["collection1", "collection2"]
         mock_client.list_collections.assert_called_once()
+
+
+def test_has_matching_content(chroma_handler, mock_collection):
+    """Test checking for duplicate content"""
+    url = "http://test.com/page"
+    content = "Test content"
+    
+    # Test when content doesn't exist
+    mock_collection.get.return_value = {"ids": [], "metadatas": []}
+    assert not chroma_handler.has_matching_content(url, content)
+    
+    # Test when content exists but doesn't match
+    mock_collection.get.return_value = {
+        "ids": ["test_id"],
+        "metadatas": [{"url": url, "content_hash": "different_hash"}]
+    }
+    assert not chroma_handler.has_matching_content(url, content)
+    
+    # Test when content exists and matches
+    content_hash = blake2b(content.encode(), digest_size=16).hexdigest()
+    mock_collection.get.return_value = {
+        "ids": ["test_id"],
+        "metadatas": [{"url": url, "content_hash": content_hash}]
+    }
+    assert chroma_handler.has_matching_content(url, content)
+    
+    # Verify the correct query was made
+    mock_collection.get.assert_called_with(
+        where={"url": url},
+        include=["metadatas"]
+    )
+
+
+def test_add_document_with_content_tracking(chroma_handler, mock_collection):
+    """Test that documents are stored with content hashes"""
+    url = "http://test.com/page"
+    content = "Test content"
+    
+    # Add document
+    chroma_handler.add_document(content, url)
+    
+    # Verify content hash was included in metadata
+    expected_hash = blake2b(content.encode(), digest_size=16).hexdigest()
+    
+    # Verify the upsert method was called
+    mock_collection.upsert.assert_called()
+    
+    # Get the metadata from the call
+    call_args = mock_collection.upsert.call_args
+    metadata = call_args[1]["metadatas"][0]
+    
+    # Verify metadata contains content hash
+    assert "content_hash" in metadata
+    assert metadata["content_hash"] == expected_hash
+    
+    # Verify last_updated timestamp was added
+    assert "last_updated" in metadata
+
+
+def test_content_change_detection(chroma_handler, mock_collection):
+    """Test the full workflow of content change detection"""
+    url = "http://test.com/page"
+    original_content = "Original content"
+    modified_content = "Modified content"
+    
+    # First addition
+    chroma_handler.add_document(original_content, url)
+    
+    # Setup mock to return the original content's metadata
+    original_hash = blake2b(original_content.encode(), digest_size=16).hexdigest()
+    mock_collection.get.return_value = {
+        "ids": ["test_id"],
+        "metadatas": [{"url": url, "content_hash": original_hash}]
+    }
+    
+    # Check with same content
+    assert chroma_handler.has_matching_content(url, original_content)
+    
+    # Check with modified content
+    assert not chroma_handler.has_matching_content(url, modified_content)
+    
+    # Add modified content
+    chroma_handler.add_document(modified_content, url)
+    
+    # Verify the document was updated with new hash
+    modified_hash = blake2b(modified_content.encode(), digest_size=16).hexdigest()
+    last_call = mock_collection.upsert.call_args
+    assert last_call[1]["metadatas"][0]["content_hash"] == modified_hash

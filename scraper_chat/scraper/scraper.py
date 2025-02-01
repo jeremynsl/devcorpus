@@ -418,6 +418,10 @@ async def scrape_recursive(
                     if html:
                         text = html_to_markdown(html)
                         if text:
+                            if use_db and db_handler and db_handler.has_matching_content(url, text):
+                                logger.info(f"Content unchanged for {url}, skipping...")
+                                to_visit.task_done()
+                                continue
                             file_handle.write(f"URL: {url}\n{text}\n\n---\n\n")
                             file_handle.flush()
                             if db_handler:

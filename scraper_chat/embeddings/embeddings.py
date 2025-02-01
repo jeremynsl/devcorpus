@@ -37,7 +37,7 @@ class Reranker:
                 logger.warning(f"No reranker configured, using default: {model_name}")
 
             logger.info(f"Initializing reranking model: {model_name}")
-            self._rerank_model = CrossEncoder(model_name)
+            self._rerank_model = CrossEncoder(model_name, device="cuda")
 
         except Exception as e:
             logger.exception(f"Error loading reranking model: {e}")
@@ -91,7 +91,7 @@ class EmbeddingManager:
             logger.info(f"Initializing embedding model: {model_name}")
             self._embedding_function = (
                 embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name=model_name
+                    model_name=model_name, device="cuda"
                 )
             )
 
