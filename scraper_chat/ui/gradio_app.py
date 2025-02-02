@@ -1,4 +1,7 @@
-# gradio_app.py (or gradio.py)
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.utils.hub")
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic._internal._config")
+
 import gradio as gr
 from scraper_chat.logger.logging_config import configure_logging, logger
 from ..database.chroma_handler import ChromaHandler
@@ -8,20 +11,19 @@ from ..config import CONFIG_FILE, load_config
 from ..chunking.chunking import ChunkingManager
 from ..core.llm_config import LLMConfig
 import json
-import warnings
 from typing import List
 import asyncio
 import logging
 from scraper_chat.ui.gradio_settings import create_settings_tab
 from typing import Tuple, AsyncGenerator
 import re
-configure_logging()
-# Filter HF_HOME deprecation warning
-warnings.filterwarnings("ignore", category=UserWarning, message=".*HF_HOME.*")
 
+configure_logging()
+
+logging.info("Launching ScraperChat")
 # Load config
-with open("scraper_config.json", "r") as f:
-    config = json.load(f)
+logging.info("Loading config")
+config = load_config(CONFIG_FILE)
 
 def colorize_log(record: str) -> str:
     """Add color to log messages based on level"""
@@ -820,7 +822,12 @@ def create_demo() -> gr.Blocks:
                     def update_url(selected):
                         if not selected:
                             return ""
-                        return selected.split(": ")[-1]
+                        # Get the part after the colon which contains the URL and the tags.
+                        url_with_tags = selected.split(": ")[-1]
+                        # Split again on ' - ' and take the first part (the URL).
+                        url = url_with_tags.split(" - ")[0].strip()
+                        return url
+
                     
                     # Update URL textbox when a documentation link is selected
                     doc_links.change(
