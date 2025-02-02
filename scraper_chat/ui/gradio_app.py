@@ -17,6 +17,9 @@ import logging
 from scraper_chat.ui.gradio_settings import create_settings_tab
 from typing import Tuple, AsyncGenerator
 import re
+from scraper_chat.embeddings.embeddings import EmbeddingManager
+from scraper_chat.config.config import load_config, save_config
+from scraper_chat.ui.gradio_css import gradio_css
 
 configure_logging()
 
@@ -595,205 +598,33 @@ def load_doc_links():
         return [""]
 
 
-def create_demo() -> gr.Blocks:
+def create_demo():
     """Create the Gradio demo Blocks layout."""
+    # Load config for embedding models
+    config = load_config(CONFIG_FILE)
+    available_models = config.get("embeddings", {}).get("models", {}).get("available", [])
+    default_model = config.get("embeddings", {}).get("models", {}).get("default")
+    
+    def update_embedding_model(model_name):
+        try:
+            # Update config
+            config = load_config(CONFIG_FILE)
+            config["embeddings"]["models"]["default"] = model_name
+            save_config(config, CONFIG_FILE)
+            
+            # Reinitialize embedding manager
+            EmbeddingManager._instance = None
+            EmbeddingManager()
+            
+            return f"Successfully switched to embedding model: {model_name}"
+        except Exception as e:
+            return f"Error switching embedding model: {str(e)}"
+    
     chat_app = GradioChat()
 
     with gr.Blocks(
         title="Documentation Chat & Scraper",
-        css="""
-        /* Supabase-inspired theme */
-        :root {
-            --background-color: #1c1c1c;
-            --surface-color: #2a2a2a;
-            --border-color: #404040;
-            --text-color: #ffffff;
-            --accent-color: #3ecf8e;  /* Supabase green */
-            --error-color: #ff4444;
-        }
-        
-        .gradio-container {
-            background-color: var(--background-color) !important;
-        }
-        
-        /* Make emojis more visible */
-        .collection-emoji {
-            font-size: 1.2em;
-            margin-right: 0.5em;
-            opacity: 1 !important;
-        }
-        
-        /* Ensure dropdown text is visible */
-        .gr-dropdown {
-            color: var(--text-color) !important;
-        }
-        .gr-dropdown option {
-            background-color: var(--surface-color);
-            color: var(--text-color);
-        }
-        
-        .tabs > .tab-nav {
-            background-color: var(--background-color) !important;
-            border-bottom: 1px solid var(--border-color) !important;
-        }
-        
-        .tabs > .tab-nav > button {
-            color: var(--text-color) !important;
-        }
-        
-        .tabs > .tab-nav > button.selected {
-            color: var(--accent-color) !important;
-            border-bottom-color: var(--accent-color) !important;
-        }
-        
-        /* Input styling */
-        input[type="text"], textarea {
-            background-color: var(--surface-color) !important;
-            border: 1px solid var(--border-color) !important;
-            color: var(--text-color) !important;
-        }
-        
-        /* Button styling */
-        .primary {
-            background-color: var(--accent-color) !important;
-            color: var(--background-color) !important;
-        }
-        
-        /* Progress display */
-        .tqdm-status {
-            background-color: transparent !important;
-            border: none !important;
-            color: var(--accent-color) !important;
-            font-family: monospace;
-            font-size: 0.9em;
-            opacity: 0.8;            
-            padding: 0 !important;
-        }
-        
-        /* Log display */
-        .scraping-progress {
-            font-family: monospace;
-            white-space: pre-wrap;
-            height: 360px;
-            --accent-color: transparent !important;
-            outline: none !important;
-        }
-        
-        /* Override Gradio's loading animation only for scraping progress */
-        .scraping-progress.generating,
-        .scraping-progress .generating {
-            border: none !important;
-            box-shadow: none !important;
-            --accent-color: transparent !important;
-        }
-        
-        .scraping-progress.progress,
-        .scraping-progress .progress {
-            border: none !important;
-            box-shadow: none !important;
-            --accent-color: transparent !important;
-        }
-        
-        /* Ensure no animation effects on progress container children */
-        .scraping-progress > *:not(.tqdm-status) {
-            --accent-color: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-        }
-        
-        .scraping-progress:focus-within {
-            outline: none !important;
-            box-shadow: none !important;
-            --accent-color: transparent !important;
-        }
-        
-        .scraping-progress::-webkit-scrollbar {
-            width: 10px;
-        }
-        
-        .scraping-progress::-webkit-scrollbar-track {
-            background: var(--surface-color);
-        }
-        
-        .scraping-progress::-webkit-scrollbar-thumb {
-            background: var(--border-color);
-            border-radius: 5px;
-        }
-        
-        .scraping-progress::-webkit-scrollbar-thumb:hover {
-            background: #666;
-        }
-        
-        
-        /* Reference link styling */
-        .reference-link {
-            color: var(--accent-color) !important;
-            text-decoration: underline !important;
-            font-weight: bold !important;
-            padding: 0 2px !important;
-            display: inline-block !important;
-        }
-        
-        /* Markdown styling */
-        .chat-window {
-            font-family: system-ui, -apple-system, sans-serif;
-        }
-        
-        .chat-window code {
-            background: var(--surface-color);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            padding: 2px 4px;
-            font-family: 'Consolas', 'Monaco', monospace;
-        }
-        
-        .chat-window pre {
-            background: var(--surface-color);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 12px;
-            margin: 8px 0;
-            overflow-x: auto;
-        }
-        
-        .chat-window pre code {
-            background: none;
-            border: none;
-            padding: 0;
-        }
-        
-        .chat-window blockquote {
-            border-left: 3px solid var(--accent-color);
-            margin: 8px 0;
-            padding-left: 12px;
-            color: #cccccc;
-        }
-        
-        .chat-window table {
-            border-collapse: collapse;
-            margin: 8px 0;
-            width: 100%;
-        }
-        
-        .chat-window th,
-        .chat-window td {
-            border: 1px solid var(--border-color);
-            padding: 6px 8px;
-            text-align: left;
-        }
-        
-        .chat-window th {
-            background: var(--surface-color);
-        }
-        
-        .chat-window {
-            padding: 16px;
-            background-color: var(--surface-color);
-            color: var(--text-color);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-        }
-    """
+        css=gradio_css
     ) as demo:
             # Configure queue with default settings
             demo.queue(default_concurrency_limit=1)
@@ -817,6 +648,27 @@ def create_demo() -> gr.Blocks:
                     url = gr.Textbox(
                         label="URL",
                         info="Enter the URL of the documentation to scrape"
+                    )
+                    
+                    # Add embedding model selector
+                    with gr.Row():
+                        embedding_model = gr.Dropdown(
+                            choices=available_models,
+                            value=default_model,
+                            label="Embedding Model",
+                            info="Select the model to use for creating document embeddings"
+                        )
+                        embedding_status = gr.Textbox(
+                            info="Status",
+                            label="Model Status",
+                            interactive=False
+                        )
+                    
+                    # Connect embedding model change event
+                    embedding_model.change(
+                        fn=update_embedding_model,
+                        inputs=[embedding_model],
+                        outputs=[embedding_status]
                     )
                     
                     def update_url(selected):
@@ -848,9 +700,9 @@ def create_demo() -> gr.Blocks:
                             info="Rescrape pages even if they already exist in the database"
                         )
                         use_cluster = gr.Checkbox(
-                            label="Use Clustering",
+                            label="Use Cluster Chunking",
                             value=False,
-                            info="Use clustering to group similar content"
+                            info="More resource-intensive but better for retrieval"
                         )
                     scrape_btn = gr.Button("Start Scraping", variant="primary", scale=1)
 
@@ -1048,27 +900,31 @@ def create_demo() -> gr.Blocks:
                 with gr.Tab("Settings"):
                     save_button, status_output = create_settings_tab()
                     
-                    # When settings are saved, refresh the config and UI components
+                    # When settings are saved, refresh the global config and UI components
                     def refresh_app_config():
                         """Refresh the global config and update UI components"""
                         global config
                         with open("scraper_config.json", "r") as f:
                             config = json.load(f)
                         
-                        # Return updates for the chat interface
+                        # Return updates for both chat and embedding model dropdowns
                         return [
                             gr.update(
                                 choices=config["chat"]["models"]["available"],
                                 value=config["chat"]["models"]["default"]
                             ),
-                            "Settings updated - Chat models refreshed"
+                            gr.update(
+                                choices=config["embeddings"]["models"]["available"],
+                                value=config["embeddings"]["models"]["default"]
+                            ),
+                            "Settings updated - Models refreshed"
                         ]
                     
-                    # Connect both save and refresh buttons to update chat components
+                    # Connect both save and refresh buttons to update components
                     save_button.click(
                         fn=refresh_app_config,
                         inputs=[],
-                        outputs=[model, status_output]
+                        outputs=[model, embedding_model, status_output]
                     ).then(  # Also reinitialize the chat interface
                         fn=chat_app.initialize_chat,
                         inputs=[collections, model, rate_limit],

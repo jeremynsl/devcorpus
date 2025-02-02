@@ -27,3 +27,7 @@ def load_config(config_path: str) -> dict:  # Return full config as dictionary
         except ValueError as e:
             logger.error(f"Invalid JSON config file {config_path}: {e}")
             sys.exit(1)
+
+def save_config(new_config, config_path: str):
+    with open(config_path, 'w') as f:
+        json.dump(new_config, f, indent=4)
