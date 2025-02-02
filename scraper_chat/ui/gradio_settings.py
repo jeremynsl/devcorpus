@@ -52,7 +52,6 @@ def save_all_settings(proxies, rate_limit, user_agent,
                      msg_history_size, max_retries, retry_base_delay, retry_max_delay,
                      system_prompt, rag_prompt,
                      chat_models, default_chat_model,
-                     scraping_chunk_size, scraping_overlap,
                      pytorch_device):
     try:
         config = load_config()
@@ -86,12 +85,11 @@ def save_all_settings(proxies, rate_limit, user_agent,
         config['chat']['models']['available'] = [m.strip() for m in chat_models.split(',')]
         config['chat']['models']['default'] = default_chat_model
         
-        # Scraping settings
-        config['scraping']['chunk_size'] = int(scraping_chunk_size)
-        config['scraping']['overlap'] = int(scraping_overlap)
+        # PyTorch device
+        config['pytorch_device'] = pytorch_device
         
         save_config(config)
-        return "Settings saved successfully. Please wait for UI refresh..."
+        return "Settings saved successfully!"
     except Exception as e:
         return f"Error saving settings: {str(e)}"
 
@@ -123,8 +121,6 @@ def create_settings_tab():
                 config.get('chat', {}).get('rag_prompt', ''),
                 ', '.join(config.get('chat', {}).get('models', {}).get('available', [])),
                 config.get('chat', {}).get('models', {}).get('default', ''),
-                int(config.get('scraping', {}).get('chunk_size', 1000)),
-                int(config.get('scraping', {}).get('overlap', 200)),
                 config.get('pytorch_device', 'cpu'),
                 "Settings refreshed"
             ]
@@ -141,155 +137,163 @@ def create_settings_tab():
             return None
 
     with gr.Group():
-        gr.Markdown("### Basic Settings")
+        gr.HTML("Basic Settings")
         proxies_input = gr.Textbox(
             label="Proxies (comma-separated IPs)",
             value=', '.join(current_config.get('proxies', [])),
-            lines=2
+            lines=2,
+            container=True
         )
         rate_limit_input = gr.Number(
             label="Rate Limit (requests per second)",
             value=current_config.get('rate_limit', 3),
-            precision=0
+            precision=0,
+            container=True
         )
         user_agent_input = gr.Textbox(
             label="User Agent",
             value=current_config.get('user_agent', ''),
-            lines=2
+            lines=2,
+            container=True
         )
         pytorch_device_input = gr.Textbox(
             label="PyTorch Device",
             value=current_config.get('pytorch_device', 'cpu'),
-            info="Enter the PyTorch device (e.g., 'cuda' or 'cpu'). NOTE: A full application restart is required for changes to take effect."
+            info="Enter the PyTorch device (e.g., 'cuda' or 'cpu'). NOTE: A full application restart is required for changes to take effect.",
+            container=True
         )
-            
+        
         with gr.Group():
-            gr.Markdown("### Embeddings Settings")
+            gr.HTML("Embeddings Settings")
             embedding_models_input = gr.Textbox(
                 label="Available Embedding Models (comma-separated)",
                 value=', '.join(current_config.get('embeddings', {}).get('models', {}).get('available', [])),
-                lines=2
+                lines=2,
+                container=True
             )
             default_embedding_input = gr.Textbox(
                 label="Default Embedding Model",
-                value=current_config.get('embeddings', {}).get('models', {}).get('default', '')
+                value=current_config.get('embeddings', {}).get('models', {}).get('default', ''),
+                container=True
             )
             reranker_model_input = gr.Textbox(
                 label="Reranker Model",
-                value=current_config.get('embeddings', {}).get('models', {}).get('reranker', '')
+                value=current_config.get('embeddings', {}).get('models', {}).get('reranker', ''),
+                container=True
             )
             initial_percent_input = gr.Slider(
                 label="Initial Retrieval Percentage",
                 minimum=0.0,
                 maximum=1.0,
                 value=current_config.get('embeddings', {}).get('retrieval', {}).get('initial_percent', 0.2),
-                step=0.1
+                step=0.1,
+                container=True
             )
             min_initial_input = gr.Number(
                 label="Minimum Initial Results",
                 value=current_config.get('embeddings', {}).get('retrieval', {}).get('min_initial', 50),
-                precision=0
+                precision=0,
+                container=True
             )
             max_initial_input = gr.Number(
                 label="Maximum Initial Results",
                 value=current_config.get('embeddings', {}).get('retrieval', {}).get('max_initial', 500),
-                precision=0
+                precision=0,
+                container=True
             )
-        
+    
         with gr.Group():
-            gr.Markdown("### Chunking Settings")
+            gr.HTML("Chunking Settings")
             chunk_size_input = gr.Number(
                 label="Chunk Size",
                 value=current_config.get('chunking', {}).get('chunk_size', 200),
-                precision=0
+                precision=0,
+                container=True
             )
             max_chunk_size_input = gr.Number(
                 label="Maximum Chunk Size",
                 value=current_config.get('chunking', {}).get('max_chunk_size', 200),
-                precision=0
+                precision=0,
+                container=True
             )
             chunk_overlap_input = gr.Number(
                 label="Chunk Overlap",
                 value=current_config.get('chunking', {}).get('chunk_overlap', 0),
-                precision=0
+                precision=0,
+                container=True
             )
-        
+    
         with gr.Group():
-            gr.Markdown("### Chat Settings")
+            gr.HTML("Chat Settings")
             msg_history_size_input = gr.Number(
                 label="Message History Size",
                 value=current_config.get('chat', {}).get('message_history_size', 10),
-                precision=0
+                precision=0,
+                container=True
             )
             max_retries_input = gr.Number(
                 label="Maximum Retries",
                 value=current_config.get('chat', {}).get('max_retries', 3),
-                precision=0
+                precision=0,
+                container=True
             )
             retry_base_delay_input = gr.Number(
                 label="Retry Base Delay (seconds)",
                 value=current_config.get('chat', {}).get('retry_base_delay', 1),
-                precision=0
+                precision=0,
+                container=True
             )
             retry_max_delay_input = gr.Number(
                 label="Retry Maximum Delay (seconds)",
                 value=current_config.get('chat', {}).get('retry_max_delay', 30),
-                precision=0
+                precision=0,
+                container=True
             )
             system_prompt_input = gr.Textbox(
                 label="System Prompt",
                 value=current_config.get('chat', {}).get('system_prompt', ''),
-                lines=3
+                lines=3,
+                container=True
             )
             rag_prompt_input = gr.Textbox(
                 label="RAG Prompt",
                 value=current_config.get('chat', {}).get('rag_prompt', ''),
-                lines=5
+                lines=5,
+                container=True
             )
             chat_models_input = gr.Textbox(
                 label="Available Chat Models (comma-separated)",
                 value=', '.join(current_config.get('chat', {}).get('models', {}).get('available', [])),
-                lines=3
+                lines=3,
+                container=True
             )
             default_chat_model_input = gr.Textbox(
                 label="Default Chat Model",
-                value=current_config.get('chat', {}).get('models', {}).get('default', '')
+                value=current_config.get('chat', {}).get('models', {}).get('default', ''),
+                container=True
             )
-        
-        with gr.Group():
-            gr.Markdown("### Scraping Settings")
-            scraping_chunk_size_input = gr.Number(
-                label="Scraping Chunk Size",
-                value=current_config.get('scraping', {}).get('chunk_size', 1000),
-                precision=0
-            )
-            scraping_overlap_input = gr.Number(
-                label="Scraping Overlap",
-                value=current_config.get('scraping', {}).get('overlap', 200),
-                precision=0
-            )
-        
-        with gr.Group():
-            gr.Markdown("### Actions")
-            save_button = gr.Button("Save All Settings", variant="primary")
-            status_output = gr.Textbox(label="Status", interactive=False)
-        
-        # List of all components that need to be updated on refresh
-        all_components = [
-            proxies_input, rate_limit_input, user_agent_input,
-            embedding_models_input, default_embedding_input, reranker_model_input,
-            initial_percent_input, min_initial_input, max_initial_input,
-            chunk_size_input, max_chunk_size_input, chunk_overlap_input,
-            msg_history_size_input, max_retries_input, retry_base_delay_input, retry_max_delay_input,
-            system_prompt_input, rag_prompt_input,
-            chat_models_input, default_chat_model_input,
-            scraping_chunk_size_input, scraping_overlap_input,
-            pytorch_device_input,
-            status_output
-        ]
-        
-        # Connect the save button with automatic refresh
-        save_button.click(
+
+
+    
+              
+    save_button = gr.Button("Save All Settings", variant="primary", scale=1)
+    status_output = gr.Textbox(label="Status", interactive=False, container=True)
+
+    # List of all components that need to be updated on refresh
+    all_components = [
+        proxies_input, rate_limit_input, user_agent_input,
+        embedding_models_input, default_embedding_input, reranker_model_input,
+        initial_percent_input, min_initial_input, max_initial_input,
+        chunk_size_input, max_chunk_size_input, chunk_overlap_input,
+        msg_history_size_input, max_retries_input, retry_base_delay_input, retry_max_delay_input,
+        system_prompt_input, rag_prompt_input,
+        chat_models_input, default_chat_model_input,            
+        pytorch_device_input,
+        status_output
+    ]
+    
+    # Connect the save button with automatic refresh
+    save_button.click(
             fn=save_all_settings,
             inputs=[
                 proxies_input, rate_limit_input, user_agent_input,
@@ -299,14 +303,13 @@ def create_settings_tab():
                 msg_history_size_input, max_retries_input, retry_base_delay_input, retry_max_delay_input,
                 system_prompt_input, rag_prompt_input,
                 chat_models_input, default_chat_model_input,
-                scraping_chunk_size_input, scraping_overlap_input,
                 pytorch_device_input
             ],
-            outputs=status_output
-        ).then(
+        outputs=status_output
+    ).then(
             fn=refresh_settings,
             inputs=[],
-            outputs=all_components
+        outputs=all_components
         )
-        
-        return save_button, status_output
+    
+    return save_button, status_output
