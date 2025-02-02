@@ -1,3 +1,4 @@
+from os import path
 import chromadb
 from chromadb.config import Settings
 import logging
@@ -75,9 +76,8 @@ class ChromaHandler:
             return
         self._initialized = True
         if not ChromaHandler._client:
-            ChromaHandler._client = chromadb.Client(
-                Settings(persist_directory=self.get_db_path(), is_persistent=True)
-            )
+            ChromaHandler._client = chromadb.PersistentClient(path=self.get_db_path(), settings=Settings(anonymized_telemetry=False))
+            
         self._initialized = True
 
     def __init__(self, collection_name: str = None):
@@ -252,9 +252,8 @@ class ChromaHandler:
     def get_available_collections(cls) -> list[str]:
         """Get list of all available collections (websites)."""
         if cls._client is None:
-            cls._client = chromadb.Client(
-                Settings(persist_directory=cls.get_db_path(), is_persistent=True)
-            )
+            cls._client = chromadb.PersistentClient(path=cls.get_db_path(), settings=Settings(anonymized_telemetry=False))
+            
         return cls._client.list_collections()
 
     @classmethod
@@ -262,9 +261,8 @@ class ChromaHandler:
         """Delete a collection by name. Returns True if successful."""
         try:
             if cls._client is None:
-                cls._client = chromadb.Client(
-                    Settings(persist_directory=cls.get_db_path(), is_persistent=True)
-                )
+                cls._client = chromadb.PersistentClient(
+                    path=cls.get_db_path(), settings=Settings(anonymized_telemetry=False))
 
             # Delete from client
             cls._client.delete_collection(collection_name)
