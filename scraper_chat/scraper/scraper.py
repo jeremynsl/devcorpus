@@ -333,20 +333,24 @@ async def fetch_github_file(
 
 
 async def scrape_recursive(
-    start_url: str, user_agent: str, rate_limit: int, use_db: bool = False
+    start_url: str, user_agent: str, rate_limit: int, dump_text: bool = False, force_rescrape: bool = False
 ) -> str:
     """
     Recursively scrape all links from start_url domain.
+
+    Args:
+        start_url: URL to start scraping from
+        user_agent: User agent string to use for requests
+        rate_limit: Maximum number of concurrent requests
+        dump_text: Whether to save raw text files
+        force_rescrape: If True, rescrape pages even if they exist in the database
     """
     if not start_url.startswith(("http://", "https://")):
         return "Error: Invalid URL. Must start with http:// or https://"
 
     if "github.com" in start_url and "/blob/" not in start_url:
         logger.info(f"Detected GitHub repository URL: {start_url}")
-        db_handler: Optional[ChromaHandler] = None
-        if use_db:
-            collection_name = ChromaHandler.get_collection_name(start_url)
-            db_handler = ChromaHandler(collection_name)
+        db_handler: Optional[ChromaHandler] = ChromaHandler(ChromaHandler.get_collection_name(start_url))
         repo_info = await fetch_github_content(start_url)
         progress_bar = tqdm(
             desc="Files Processed", unit="files", total=len(repo_info["files"])
@@ -363,8 +367,7 @@ async def scrape_recursive(
                 )
                 if content:
                     file_url = f"{start_url}/blob/{repo_info['branch']}/{file['path']}"
-                    if db_handler:
-                        db_handler.add_document(content, file_url)
+                    db_handler.add_document(content, file_url)
                     progress_bar.update(1)
                     logger.info(f"Processed: {file['path']}")
             except Exception as e:
@@ -378,10 +381,7 @@ async def scrape_recursive(
     start_path: str = urlparse(start_url).path or "/"
     visited: set[str] = set()
     to_visit: asyncio.Queue[str] = asyncio.Queue()
-    db_handler: Optional[ChromaHandler] = None
-    if use_db:
-        collection_name = ChromaHandler.get_collection_name(start_url)
-        db_handler = ChromaHandler(collection_name)
+    db_handler: ChromaHandler = ChromaHandler(ChromaHandler.get_collection_name(start_url))
     await to_visit.put(remove_anchor(start_url))
     semaphore = asyncio.Semaphore(rate_limit)
     progress_bar = tqdm(desc="Pages Scraped", unit="pages", total=0)
@@ -391,56 +391,54 @@ async def scrape_recursive(
             f"Pages Scraped: {progress_bar.n} pages [{progress_bar.format_dict.get('rate', 0):.2f} pages/s]"
         )
 
-    file_handle = open(output_file, "w", encoding="utf-8")
-    file_handle.write(f"Start scraping: {start_url}\n\n")
+    file_handle = None
+    if dump_text:
+        file_handle = open(output_file, "w", encoding="utf-8")
+        file_handle.write(f"Start scraping: {start_url}\n\n")
 
     async def worker() -> None:
         try:
             while True:
                 try:
                     url = await to_visit.get()
-                except asyncio.CancelledError:
-                    if not to_visit.empty():
-                        to_visit.task_done()
-                    raise
-                except asyncio.QueueEmpty:
-                    break
+                    try:
+                        if url in visited:
+                            continue
 
-                try:
-                    if url in visited:
-                        to_visit.task_done()
-                        continue
+                        visited.add(url)
+                        logger.info(f"Scraping: {url}")
+                        async with semaphore:
+                            html = await fetch_page(url, user_agent)
+                            if html:
+                                text = html_to_markdown(html)
+                                if text:
+                                    # Check if we should skip this URL due to duplicate content
+                                    if not force_rescrape and db_handler.has_matching_content(url, text):
+                                        logger.info(f"Skipping duplicate content: {url}")
+                                        continue
 
-                    visited.add(url)
-                    logger.info(f"Scraping: {url}")
-                    async with semaphore:
-                        html = await fetch_page(url, user_agent)
-                    if html:
-                        text = html_to_markdown(html)
-                        if text:
-                            if use_db and db_handler and db_handler.has_matching_content(url, text):
-                                logger.info(f"Content unchanged for {url}, skipping...")
-                                to_visit.task_done()
-                                continue
-                            file_handle.write(f"URL: {url}\n{text}\n\n---\n\n")
-                            file_handle.flush()
-                            if db_handler:
-                                db_handler.add_document(text, url)
-                                logger.debug(f"Stored in ChromaDB: {url}")
-                        links = extract_links(html, url, domain, start_path)
-                        logger.debug(f"Extracted links: {links}")
-                        for link in links:
-                            if link not in visited:
-                                await to_visit.put(link)
+                                    # Always store in database
+                                    db_handler.add_document(text, url)
+                                    
+                                    # Optionally save raw text files
+                                    if dump_text:
+                                        file_handle.write(f"URL: {url}\n{text}\n\n---\n\n")
+                                        file_handle.flush()
+                                    # Extract and queue new links
+                                    links = extract_links(html, url, domain, start_path)
+                                    for link in links:
+                                        if link not in visited:
+                                            await to_visit.put(link)
+
                         progress_bar.update(1)
                         update_progress()
-                    to_visit.task_done()
+                    finally:
+                        to_visit.task_done()
                 except Exception as e:
-                    logger.error(f"Error processing {url}: {e}")
+                    logger.error(f"Error processing {url}: {str(e)}")
                     to_visit.task_done()
-                    continue
         except asyncio.CancelledError:
-            logger.info("Worker cancelled, cleaning up...")
+            logger.debug("Worker cancelled")
             raise
         except Exception as e:
             logger.error(f"Worker error: {e}")
@@ -465,8 +463,9 @@ async def scrape_recursive(
             except Exception as e:
                 logger.error(f"Error during worker cleanup: {e}")
         progress_bar.close()
-        file_handle.write("Scraping completed.\n")
-        file_handle.close()
+        if dump_text:
+            file_handle.write("Scraping completed.\n")
+            file_handle.close()
         logger.info("Scraping completed.")
 
     return "Scraping completed successfully."
