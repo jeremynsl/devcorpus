@@ -36,8 +36,10 @@ class Reranker:
                 model_name = ConfigDefaults.RERANKER_MODEL  # Default reranker
                 logger.warning(f"No reranker configured, using default: {model_name}")
 
-            logger.info(f"Initializing reranking model: {model_name}")
-            self._rerank_model = CrossEncoder(model_name, device="cuda")
+            # Get device from config, default to cpu
+            device = config.get("pytorch_device", "cpu")
+            logger.info(f"Initializing reranking model: {model_name} on device: {device}")
+            self._rerank_model = CrossEncoder(model_name, device=device)
 
         except Exception as e:
             logger.exception(f"Error loading reranking model: {e}")
@@ -88,10 +90,12 @@ class EmbeddingManager:
                     f"No embedding model configured, using default: {model_name}"
                 )
 
-            logger.info(f"Initializing embedding model: {model_name}")
+            # Get device from config, default to cpu
+            device = config.get("pytorch_device", "cpu")
+            logger.info(f"Initializing embedding model: {model_name} on device: {device}")
             self._embedding_function = (
                 embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name=model_name, device="cuda"
+                    model_name=model_name, device=device
                 )
             )
 
@@ -100,7 +104,8 @@ class EmbeddingManager:
             # Fallback to maintain compatibility
             self._embedding_function = (
                 embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name=ConfigDefaults.EMBEDDING_MODEL
+                    model_name=ConfigDefaults.EMBEDDING_MODEL,
+                    device="cpu"  # Fallback to CPU on error
                 )
             )
 

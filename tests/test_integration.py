@@ -184,7 +184,11 @@ async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_con
             
             # 1. Scrape documentation
             await scrape_recursive(
-                "http://test.com/page1", "TestBot/1.0", rate_limit=2, use_db=True
+                start_url="http://test.com/page1", 
+                user_agent="TestBot/1.0", 
+                rate_limit=2, 
+                dump_text=True, 
+                force_rescrape=False,
             )
 
             # 2. Verify ChromaDB has content
@@ -321,10 +325,11 @@ async def test_error_recovery(test_config, test_db, mock_config):
         try:
             async with asyncio.timeout(2):  # 2 second timeout
                 await scrape_recursive(
-                    "http://test.com/error",
-                    "TestBot/1.0",
+                    start_url="http://test.com/error",
+                    user_agent="TestBot/1.0",
                     rate_limit=1,  # Use single worker for simpler testing
-                    use_db=True,
+                    dump_text=False,
+                    force_rescrape=False,
                 )
         except asyncio.TimeoutError:
             # Expected timeout since failing fetches never complete

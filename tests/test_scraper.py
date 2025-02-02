@@ -367,7 +367,7 @@ async def test_scrape_recursive():
             try:
                 async with asyncio.timeout(2):
                     await scrape_recursive(
-                        "http://test.com", "TestBot/1.0", rate_limit=2, use_db=False
+                        "http://test.com", "TestBot/1.0", rate_limit=2, dump_text=False
                     )
             except asyncio.TimeoutError:
                 # Get all tasks that are still running
@@ -512,7 +512,7 @@ async def test_scrape_recursive_github(mock_github_response, mock_config):
                 "https://github.com/test/repo",
                 mock_config["user_agent"],
                 mock_config["rate_limit"],
-                use_db=True,
+                dump_text=False,
             )
 
             assert "Successfully processed" in result

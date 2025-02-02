@@ -204,7 +204,7 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
                         "This is a test page with Feature 1 details. Feature 1 is an important component that provides key functionality."
                     ]
 
-                    async def mock_scrape(url, user_agent, rate_limit=1, use_db=True):
+                    async def mock_scrape(url, user_agent, rate_limit=1, dump_text=True):
                         logger.debug(f"Mock scraping {url}")
                         # Mock HTML content that contains Feature 1
                         html = """
@@ -218,7 +218,7 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
                         text = extract_text_from_html(html)
                         logger.debug(f"Extracted text: {text[:200]}...")
 
-                        if text and use_db:
+                        if text and dump_text:
                             # Get collection name from URL
                             collection_name = ChromaHandler.get_collection_name(url)
                             logger.debug(f"Using collection: {collection_name}")
@@ -229,7 +229,7 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
                             logger.debug(f"Added document to collection {collection_name}")
 
                     async with asyncio.timeout(10):  # Increase timeout for scraping
-                        await mock_scrape(page_url, "TestBot/1.0")
+                        await mock_scrape(page_url, "TestBot/1.0", dump_text=True)
 
                     # Wait a moment for ChromaDB to process
                     await asyncio.sleep(0.5)
