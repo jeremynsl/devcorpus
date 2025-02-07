@@ -3,6 +3,8 @@ import aiohttp
 from typing import Optional, List, Dict, Any
 from urllib.parse import urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
+from urllib import robotparser
 from trafilatura.core import extract_metadata
 from trafilatura import extract
 from tqdm import tqdm
@@ -332,6 +334,88 @@ async def fetch_github_file(
                 raise Exception(f"Failed to get file content: {response.status}")
 
 
+async def check_sitemap(url: str, user_agent: str) -> Optional[List[str]]:
+    """
+    Check for sitemap.xml and parse URLs from it.
+    Will check both the given URL path and the root domain.
+    """
+    parsed = urlparse(url)
+    root_domain = f"{parsed.scheme}://{parsed.netloc}"
+    
+    # List of possible sitemap locations to check
+    sitemap_locations = [
+        urljoin(url, "sitemap.xml"),  # Current path
+        urljoin(root_domain, "sitemap.xml"),  # Root domain
+        urljoin(root_domain, "sitemap_index.xml"),  # Common alternate name
+    ]
+    
+    for sitemap_url in sitemap_locations:
+        try:
+            content = await fetch_page(sitemap_url, user_agent)
+            if not content:
+                continue
+                
+            # Try to parse as XML
+            try:
+                root = ET.fromstring(content)
+                urls = set()
+                
+                # Check if this is a sitemap index
+                if "sitemapindex" in root.tag:
+                    for sitemap in root.findall(".//{*}loc"):
+                        sub_content = await fetch_page(sitemap.text, user_agent)
+                        if sub_content:
+                            try:
+                                sub_root = ET.fromstring(sub_content)
+                                urls.update(loc.text for loc in sub_root.findall(".//{*}loc"))
+                            except ET.ParseError:
+                                continue
+                else:
+                    # Direct urlset sitemap
+                    urls.update(loc.text for loc in root.findall(".//{*}loc"))
+                
+                if urls:
+                    logger.info(f"Found {len(urls)} URLs in sitemap at {sitemap_url}")
+                    return list(urls)
+                    
+            except ET.ParseError:
+                continue
+                
+        except Exception as e:
+            logger.debug(f"Error checking sitemap at {sitemap_url}: {str(e)}")
+            continue
+    
+    return None
+
+
+async def check_robots_txt(url: str, user_agent: str) -> Optional[robotparser.RobotFileParser]:
+    """
+    Fetch and parse robots.txt for a given URL.
+    Returns parser object if robots.txt exists, None otherwise.
+    """
+    parsed = urlparse(url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+    
+    try:
+        content = await fetch_page(robots_url, user_agent)
+        if content:
+            parser = robotparser.RobotFileParser(robots_url)
+            parser.parse(content.splitlines())
+            logger.info(f"Found and parsed robots.txt at {robots_url}")
+            return parser
+    except Exception as e:
+        logger.debug(f"Error fetching robots.txt at {robots_url}: {str(e)}")
+    
+    return None
+
+
+def can_fetch(robots_parser: Optional[robotparser.RobotFileParser], url: str, user_agent: str) -> bool:
+    """Check if URL can be fetched according to robots.txt rules"""
+    if robots_parser is None:
+        return True
+    return robots_parser.can_fetch(user_agent, url)
+
+
 async def scrape_recursive(
     start_url: str,
     user_agent: str,
@@ -390,7 +474,23 @@ async def scrape_recursive(
     db_handler: ChromaHandler = ChromaHandler(
         ChromaHandler.get_collection_name(start_url)
     )
-    await to_visit.put(remove_anchor(start_url))
+
+    # Check robots.txt first
+    robots_parser = await check_robots_txt(start_url, user_agent)
+    if robots_parser and not can_fetch(robots_parser, start_url, user_agent):
+        return "Error: URL is disallowed by robots.txt"
+
+    # Check for sitemap
+    sitemap_urls = await check_sitemap(start_url, user_agent)
+    if sitemap_urls:
+        logger.info("Found sitemap, using URLs from it")
+        for url in sitemap_urls:
+            if url not in visited and can_fetch(robots_parser, url, user_agent):
+                await to_visit.put(url)
+    else:
+        logger.info("No sitemap found, using recursive crawling")
+        await to_visit.put(remove_anchor(start_url))
+
     semaphore = asyncio.Semaphore(rate_limit)
     progress_bar = tqdm(desc="Pages Scraped", unit="pages", total=0)
 
@@ -411,6 +511,11 @@ async def scrape_recursive(
                     url = await to_visit.get()
                     try:
                         if url in visited:
+                            continue
+
+                        # Check robots.txt before processing URL
+                        if not can_fetch(robots_parser, url, user_agent):
+                            logger.info(f"Skipping {url} - disallowed by robots.txt")
                             continue
 
                         visited.add(url)
@@ -439,10 +544,11 @@ async def scrape_recursive(
                                             f"URL: {url}\n{text}\n\n---\n\n"
                                         )
                                         file_handle.flush()
+
                                     # Extract and queue new links
                                     links = extract_links(html, url, domain, start_path)
                                     for link in links:
-                                        if link not in visited:
+                                        if link not in visited and can_fetch(robots_parser, link, user_agent):
                                             await to_visit.put(link)
 
                         progress_bar.update(1)

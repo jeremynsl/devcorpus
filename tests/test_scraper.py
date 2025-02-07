@@ -3,6 +3,8 @@ from unittest.mock import patch, AsyncMock, mock_open, MagicMock
 import sys
 from pathlib import Path
 import asyncio
+from typing import Optional
+from urllib.robotparser import RobotFileParser
 
 # Add parent directory to path to import modules
 sys.path.append(str(Path(__file__).parent.parent))
@@ -15,6 +17,9 @@ from scraper_chat.scraper.scraper import (
     remove_anchor,
     get_output_filename,
     fetch_github_content,
+    check_sitemap,
+    check_robots_txt,
+    can_fetch,
 )
 
 
@@ -644,3 +649,172 @@ def test_scrape_recursive_import():
 
     # Verify it's an async function
     assert asyncio.iscoroutinefunction(scrape_recursive)
+
+
+@pytest.mark.asyncio
+async def test_check_sitemap():
+    """Test sitemap checking functionality"""
+    # Mock the fetch_page function to return a test sitemap
+    async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
+        if "sitemap.xml" in url:
+            return """<?xml version="1.0" encoding="UTF-8"?>
+                    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                        <url>
+                            <loc>https://test.com/page1</loc>
+                        </url>
+                        <url>
+                            <loc>https://test.com/page2</loc>
+                        </url>
+                    </urlset>"""
+        return None
+
+    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page):
+        urls = await check_sitemap("https://test.com", "test-agent")
+        assert urls is not None
+        assert len(urls) == 2
+        assert "https://test.com/page1" in urls
+        assert "https://test.com/page2" in urls
+
+
+@pytest.mark.asyncio
+async def test_check_sitemap_index():
+    """Test sitemap index handling"""
+    # Mock to test sitemap index functionality
+    async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
+        if url == "https://test.com/sitemap.xml":
+            return """<?xml version="1.0" encoding="UTF-8"?>
+                    <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                        <sitemap>
+                            <loc>https://test.com/sitemap1.xml</loc>
+                        </sitemap>
+                    </sitemapindex>"""
+        elif url == "https://test.com/sitemap1.xml":
+            return """<?xml version="1.0" encoding="UTF-8"?>
+                    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                        <url>
+                            <loc>https://test.com/page1</loc>
+                        </url>
+                    </urlset>"""
+        return None
+
+    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page):
+        urls = await check_sitemap("https://test.com", "test-agent")
+        assert urls is not None
+        assert len(urls) == 1
+        assert "https://test.com/page1" in urls
+
+
+@pytest.mark.asyncio
+async def test_check_robots_txt():
+    """Test robots.txt parsing functionality"""
+    # Mock the fetch_page function to return a test robots.txt
+    async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
+        if "robots.txt" in url:
+            return """User-agent: *
+Disallow: /private/
+Allow: /public/"""
+        return None
+
+    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page):
+        parser = await check_robots_txt("https://test.com", "test-agent")
+        assert parser is not None
+        
+        # Test allowed URLs
+        assert can_fetch(parser, "https://test.com/public/page", "test-agent") is True
+        assert can_fetch(parser, "https://test.com/", "test-agent") is True
+        
+        # Test disallowed URLs
+        assert can_fetch(parser, "https://test.com/private/page", "test-agent") is False
+
+
+@pytest.mark.asyncio
+async def test_robots_txt_integration():
+    """Test integration of robots.txt with scraping"""
+    robots_txt = """User-agent: *
+Disallow: /private/
+Allow: /public/"""
+    
+    sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
+                <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                    <url><loc>https://test.com/public/page1</loc></url>
+                    <url><loc>https://test.com/private/page2</loc></url>
+                </urlset>"""
+                
+    async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
+        if "robots.txt" in url:
+            return robots_txt
+        elif "sitemap.xml" in url:
+            return sitemap_xml
+        return "<html></html>"  # Return empty HTML for other URLs
+    
+    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page), \
+         patch("scraper_chat.scraper.scraper.ChromaHandler") as mock_chroma:
+        # Run scraper
+        from scraper_chat.scraper.scraper import scrape_recursive
+        result = await scrape_recursive("https://test.com", "test-agent", 1)
+        
+        # Verify it completed
+        assert "completed" in result.lower()
+        
+        # The private URL should not have been processed
+        mock_instance = mock_chroma.return_value
+        calls = [call[0][0] for call in mock_instance.add_document.call_args_list]
+        assert not any("private" in url for url in calls)
+
+
+@pytest.mark.asyncio
+async def test_check_robots_txt_standard_library():
+    """Test robots.txt parsing functionality with standard library"""
+    # Mock the fetch_page function to return a test robots.txt
+    async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
+        if "robots.txt" in url:
+            return """User-agent: *
+Disallow: /private/
+Allow: /public/"""
+        return None
+
+    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page):
+        parser = await check_robots_txt("https://test.com", "test-agent")
+        assert isinstance(parser, RobotFileParser)
+        
+        # Test allowed URLs
+        assert parser.can_fetch("test-agent", "https://test.com/public/page") is True
+        assert parser.can_fetch("test-agent", "https://test.com/") is True
+        
+        # Test disallowed URLs
+        assert parser.can_fetch("test-agent", "https://test.com/private/page") is False
+
+
+@pytest.mark.asyncio
+async def test_robots_txt_integration_standard_library():
+    """Test integration of robots.txt with scraping using standard library"""
+    robots_txt = """User-agent: *
+Disallow: /private/
+Allow: /public/"""
+    
+    sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
+                <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                    <url><loc>https://test.com/public/page1</loc></url>
+                    <url><loc>https://test.com/private/page2</loc></url>
+                </urlset>"""
+                
+    async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
+        if "robots.txt" in url:
+            return robots_txt
+        elif "sitemap.xml" in url:
+            return sitemap_xml
+        return "<html></html>"  # Return empty HTML for other URLs
+    
+    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page), \
+         patch("scraper_chat.scraper.scraper.ChromaHandler") as mock_chroma:
+        # Run scraper
+        from scraper_chat.scraper.scraper import scrape_recursive
+        result = await scrape_recursive("https://test.com", "test-agent", 1)
+        
+        # Verify it completed
+        assert "completed" in result.lower()
+        
+        # The private URL should not have been processed
+        mock_instance = mock_chroma.return_value
+        calls = [call[0][0] for call in mock_instance.add_document.call_args_list]
+        assert not any("private" in url for url in calls)
