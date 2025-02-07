@@ -3,7 +3,6 @@ from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
 from hashlib import blake2b
-from datetime import datetime
 from chromadb.config import Settings
 
 # Add parent directory to path to import modules
@@ -65,7 +64,7 @@ def test_singleton_pattern():
         assert handler1 is handler2
         mock_client.assert_called_once_with(
             path=ChromaHandler.get_db_path(),
-            settings=Settings(anonymized_telemetry=False)
+            settings=Settings(anonymized_telemetry=False),
         )
 
 
@@ -110,12 +109,12 @@ def test_add_document(chroma_handler, mock_collection):
     """Test adding a document"""
     # Set up mock collection to properly track calls
     mock_collection.upsert = MagicMock()
-    
+
     # Test adding a document
     url = "http://test.com/page"
     content = "Test content"
     chroma_handler.add_document(content, url)
-    
+
     # Verify the document was added
     mock_collection.upsert.assert_called()
     call_args = mock_collection.upsert.call_args[1]
@@ -128,13 +127,13 @@ def test_add_document_github(chroma_handler, mock_collection):
     """Test adding GitHub file content without chunking"""
     # Set up mock collection to properly track calls
     mock_collection.upsert = MagicMock()
-    
+
     # Test GitHub file URL
     github_url = "https://github.com/owner/repo/blob/main/file.py"
     content = "def hello():\n    return 'world'"
-    
+
     chroma_handler.add_document(content, github_url)
-    
+
     # Verify the document was added without chunking
     mock_collection.upsert.assert_called()
     call_args = mock_collection.upsert.call_args[1]
@@ -147,31 +146,31 @@ def test_add_document_regular_vs_github(chroma_handler, mock_collection):
     """Test different handling of regular vs GitHub content"""
     # Set up mock collection to properly track calls
     mock_collection.upsert = MagicMock()
-    
+
     # Regular web content should be chunked
     web_url = "https://example.com/docs"
     web_content = "A" * 2000  # Long content that would normally be chunked
-    
+
     # Mock chunking manager to return multiple chunks for web content
-    chunks = [web_content[i:i+500] for i in range(0, len(web_content), 500)]
+    chunks = [web_content[i : i + 500] for i in range(0, len(web_content), 500)]
     chroma_handler._chunking_manager.chunk_text = MagicMock(return_value=chunks)
-    
+
     chroma_handler.add_document(web_content, web_url)
-    
+
     # Verify web content was chunked
     mock_collection.upsert.assert_called()
     web_call = mock_collection.upsert.call_args[1]
     assert "documents" in web_call
     assert len(web_call["documents"]) == len(chunks)
-    
+
     # GitHub content should not be chunked
     github_url = "https://github.com/owner/repo/blob/main/file.py"
     github_content = "A" * 2000
-    
+
     # Reset mock and add GitHub content
     mock_collection.upsert.reset_mock()
     chroma_handler.add_document(github_content, github_url)
-    
+
     # Verify GitHub content was not chunked
     mock_collection.upsert.assert_called()
     github_call = mock_collection.upsert.call_args[1]
@@ -194,12 +193,14 @@ def test_delete_collection():
     """Test deleting a collection"""
     mock_client = MagicMock()
 
-    with patch("chromadb.PersistentClient", return_value=mock_client) as mock_client_class:
+    with patch(
+        "chromadb.PersistentClient", return_value=mock_client
+    ) as mock_client_class:
         result = ChromaHandler.delete_collection("test_collection")
         assert result is True
         mock_client_class.assert_called_once_with(
             path=ChromaHandler.get_db_path(),
-            settings=Settings(anonymized_telemetry=False)
+            settings=Settings(anonymized_telemetry=False),
         )
         mock_client.delete_collection.assert_called_once_with("test_collection")
 
@@ -229,47 +230,44 @@ def test_has_matching_content(chroma_handler, mock_collection):
     """Test checking for duplicate content"""
     url = "http://test.com/page"
     content = "Test content"
-    
+
     # Test when content doesn't exist
     mock_collection.get.return_value = {"ids": [], "metadatas": []}
     assert not chroma_handler.has_matching_content(url, content)
-    
+
     # Test when content exists but doesn't match
     mock_collection.get.return_value = {
         "ids": ["test_id"],
-        "metadatas": [{"url": url, "content_hash": "different_hash"}]
+        "metadatas": [{"url": url, "content_hash": "different_hash"}],
     }
     assert not chroma_handler.has_matching_content(url, content)
-    
+
     # Test when content exists and matches
     content_hash = blake2b(content.encode(), digest_size=16).hexdigest()
     mock_collection.get.return_value = {
         "ids": ["test_id"],
-        "metadatas": [{"url": url, "content_hash": content_hash}]
+        "metadatas": [{"url": url, "content_hash": content_hash}],
     }
     assert chroma_handler.has_matching_content(url, content)
-    
+
     # Verify the correct query was made
-    mock_collection.get.assert_called_with(
-        where={"url": url},
-        include=["metadatas"]
-    )
+    mock_collection.get.assert_called_with(where={"url": url}, include=["metadatas"])
 
 
 def test_add_document_with_content_tracking(chroma_handler, mock_collection):
     """Test that documents are stored with content hashes"""
     url = "http://test.com/page"
     content = "Test content"
-    
+
     # Set up mock collection to properly track calls
     mock_collection.upsert = MagicMock()
-    
+
     # Add document
     chroma_handler.add_document(content, url)
-    
+
     # Verify content hash was included in metadata
     expected_hash = blake2b(content.encode(), digest_size=16).hexdigest()
-    
+
     # Verify upsert was called with correct parameters
     mock_collection.upsert.assert_called()
     call_args = mock_collection.upsert.call_args[1]
@@ -283,32 +281,32 @@ def test_content_change_detection(chroma_handler, mock_collection):
     url = "http://test.com/page"
     original_content = "Original content"
     modified_content = "Modified content"
-    
+
     # Set up mock collection to properly track calls
     mock_collection.upsert = MagicMock()
-    
+
     # First addition
     chroma_handler.add_document(original_content, url)
-    
+
     # Setup mock to return the original content's metadata
     original_hash = blake2b(original_content.encode(), digest_size=16).hexdigest()
     mock_collection.get.return_value = {
         "ids": ["test_id"],
-        "metadatas": [{"url": url, "content_hash": original_hash}]
+        "metadatas": [{"url": url, "content_hash": original_hash}],
     }
-    
+
     # Check with same content
     assert chroma_handler.has_matching_content(url, original_content)
-    
+
     # Check with modified content
     assert not chroma_handler.has_matching_content(url, modified_content)
-    
+
     # Add modified content
     chroma_handler.add_document(modified_content, url)
-    
+
     # Verify the document was updated with new hash
     modified_hash = blake2b(modified_content.encode(), digest_size=16).hexdigest()
-    
+
     # Verify upsert was called with correct parameters
     mock_collection.upsert.assert_called()
     last_call = mock_collection.upsert.call_args[1]

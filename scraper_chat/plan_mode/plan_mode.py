@@ -3,16 +3,18 @@ from typing import Optional, Dict, Any, List, AsyncGenerator
 from scraper_chat.database.chroma_handler import ChromaHandler
 from scraper_chat.core.llm_config import LLMConfig
 
+
 @dataclass
 class PlanOutput:
     """
     A standardized output message for plan and execution steps.
-    
+
     Attributes:
         message: The content of the message.
         metadata: Optional dictionary containing extra context,
                   such as the phase of the process or the step number.
     """
+
     message: str
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -25,8 +27,6 @@ class PlanModeExecutor:
     """
 
     def __init__(self, collections, model):
-        
-
         self.db = ChromaHandler()
         self.collections = collections
         self.llm = LLMConfig(model)
@@ -117,7 +117,9 @@ DO NOT include any extra fields or text outside the JSON.
             return steps
 
         except json.JSONDecodeError:
-            self._logger_error("Failed to parse plan JSON, falling back to text parsing")
+            self._logger_error(
+                "Failed to parse plan JSON, falling back to text parsing"
+            )
             steps = []
             for line in plan_text.split("\n"):
                 line = line.strip()
@@ -174,7 +176,9 @@ Your queries:
             self._logger_debug(f"  {i}. {url} (Relevance: {relevance:.2f})")
         return top_results
 
-    async def generate_solution_for_step(self, step: str, docs: List[dict], history: List[dict]) -> AsyncGenerator[str, None]:
+    async def generate_solution_for_step(
+        self, step: str, docs: List[dict], history: List[dict]
+    ) -> AsyncGenerator[str, None]:
         """
         Given a plan step and relevant docs, generate the solution output.
         """
@@ -216,7 +220,9 @@ Using the above info, produce code or text that addresses this step:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
-    async def plan_and_execute(self, user_message: str, previous_steps: Optional[List[dict]] = None) -> AsyncGenerator[PlanOutput, None]:
+    async def plan_and_execute(
+        self, user_message: str, previous_steps: Optional[List[dict]] = None
+    ) -> AsyncGenerator[PlanOutput, None]:
         """
         Orchestrate Plan Mode with proper history tracking.
         Yields PlanOutput objects for each piece of output.
@@ -227,15 +233,11 @@ Using the above info, produce code or text that addresses this step:
         plan_chunks = []
         async for chunk in self.generate_plan(user_message):
             plan_chunks.append(chunk)
-            yield PlanOutput(
-                message=chunk,
-                metadata={"phase": "plan_generation"}
-            )
+            yield PlanOutput(message=chunk, metadata={"phase": "plan_generation"})
 
         parsed_plan = self.parse_plan("".join(plan_chunks))
         yield PlanOutput(
-            message="\n\n **Execution Phase**\n",
-            metadata={"phase": "phase_transition"}
+            message="\n\n **Execution Phase**\n", metadata={"phase": "phase_transition"}
         )
 
         # Phase 2: Step Execution
@@ -250,20 +252,20 @@ Using the above info, produce code or text that addresses this step:
             # Yield step header
             yield PlanOutput(
                 message=f"\n\n---\n**Step {step_number}**: {step}\n",
-                metadata={"phase": "step_header", "step": step_number}
+                metadata={"phase": "step_header", "step": step_number},
             )
 
             # Query Generation
             yield PlanOutput(
                 message="🔍 *Searching docs...*\n",
-                metadata={"phase": "query_generation", "step": step_number}
+                metadata={"phase": "query_generation", "step": step_number},
             )
             query_chunks = []
             async for chunk in self.generate_docs_query(step):
                 query_chunks.append(chunk)
                 yield PlanOutput(
                     message=chunk,
-                    metadata={"phase": "query_generation", "step": step_number}
+                    metadata={"phase": "query_generation", "step": step_number},
                 )
             current_step["query"] = "".join(query_chunks).strip()
             relevant_docs = self.retrieve_docs(current_step["query"])
@@ -271,35 +273,41 @@ Using the above info, produce code or text that addresses this step:
             # Solution Generation
             yield PlanOutput(
                 message="\n💡 *Generating solution...*\n",
-                metadata={"phase": "solution_generation", "step": step_number}
+                metadata={"phase": "solution_generation", "step": step_number},
             )
             solution_chunks = []
-            async for chunk in self.generate_solution_for_step(step, relevant_docs, step_history):
+            async for chunk in self.generate_solution_for_step(
+                step, relevant_docs, step_history
+            ):
                 solution_chunks.append(chunk)
                 yield PlanOutput(
                     message=chunk,
-                    metadata={"phase": "solution_generation", "step": step_number}
+                    metadata={"phase": "solution_generation", "step": step_number},
                 )
             current_step["solution"] = "".join(solution_chunks).strip()
 
         yield PlanOutput(
             message="\n\n✅ **Plan Execution Completed**",
-            metadata={"phase": "completion"}
+            metadata={"phase": "completion"},
         )
 
     # Internal logging helpers for consistency
     def _logger_info(self, msg: str):
         import logging
+
         logging.getLogger(__name__).info(msg)
 
     def _logger_error(self, msg: str):
         import logging
+
         logging.getLogger(__name__).error(msg)
 
     def _logger_warning(self, msg: str):
         import logging
+
         logging.getLogger(__name__).warning(msg)
 
     def _logger_debug(self, msg: str):
         import logging
+
         logging.getLogger(__name__).debug(msg)

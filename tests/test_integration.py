@@ -95,7 +95,7 @@ def mock_html_content():
                 <p>Additional documentation content on page 2.</p>
                 <a href="/page1">Back to Page 1</a>
             </body></html>
-        """
+        """,
     }
 
 
@@ -116,7 +116,11 @@ def mock_collection():
     collection = MagicMock()
     # Mock query to return documentation content
     collection.query.return_value = {
-        "documents": [["This is a test documentation page. It contains important documentation content here."]],
+        "documents": [
+            [
+                "This is a test documentation page. It contains important documentation content here."
+            ]
+        ],
         "metadatas": [[{"url": "http://test.com/page1"}]],
         "distances": [[0.5]],
     }
@@ -133,22 +137,26 @@ def chroma_handler(mock_collection):
     handler.has_matching_content = MagicMock(return_value=False)
     # Mock the chunking manager to return actual content
     handler._chunking_manager.chunk_text = MagicMock(
-        return_value=["This is a test documentation page. It contains important documentation content here."]
+        return_value=[
+            "This is a test documentation page. It contains important documentation content here."
+        ]
     )
     mock_collection.get_or_create_collection.return_value = mock_collection
     return handler
 
 
 @pytest.mark.asyncio
-async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_content, mock_collection):
+async def test_full_scrape_and_chat_workflow(
+    test_config, test_db, mock_html_content, mock_collection
+):
     """Test the full workflow: scraping, storing in DB, and chatting"""
     # Configure ChromaDB to use test path
     ChromaHandler.configure(test_db)
-    
+
     # Mock ChromaDB client and collection
-    with patch.object(ChromaHandler, '_client') as mock_client:
+    with patch.object(ChromaHandler, "_client") as mock_client:
         mock_client.get_or_create_collection.return_value = mock_collection
-        
+
         # Mock HTTP responses
         async def mock_fetch(*args, **kwargs):
             url = args[0]
@@ -163,9 +171,12 @@ async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_con
             async def response_gen():
                 yield MagicMock(
                     choices=[
-                        MagicMock(delta=MagicMock(content="Based on the documentation, "))
+                        MagicMock(
+                            delta=MagicMock(content="Based on the documentation, ")
+                        )
                     ]
                 )
+
             return response_gen()
 
         with (
@@ -176,18 +187,18 @@ async def test_full_scrape_and_chat_workflow(test_config, test_db, mock_html_con
             ),
             patch("scraper_chat.config.CONFIG_FILE", test_config),
             # Mock the chunking manager to return actual content
-            patch.object(ChromaHandler, '_chunking_manager') as mock_chunking_manager,
+            patch.object(ChromaHandler, "_chunking_manager") as mock_chunking_manager,
         ):
             mock_chunking_manager.chunk_text.return_value = [
                 "This is a test documentation page. It contains important documentation content here."
             ]
-            
+
             # 1. Scrape documentation
             await scrape_recursive(
-                start_url="http://test.com/page1", 
-                user_agent="TestBot/1.0", 
-                rate_limit=2, 
-                dump_text=True, 
+                start_url="http://test.com/page1",
+                user_agent="TestBot/1.0",
+                rate_limit=2,
+                dump_text=True,
                 force_rescrape=False,
             )
 

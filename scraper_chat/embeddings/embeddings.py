@@ -5,6 +5,7 @@ import logging
 from sentence_transformers import CrossEncoder
 from scraper_chat.config.config import load_config, CONFIG_FILE
 from threading import Lock
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +35,9 @@ class Reranker:
 
             # Get device from config, default to cpu
             device = config.get("pytorch_device", "cpu")
-            logger.info(f"Initializing reranking model: {model_name} on device: {device}")
+            logger.info(
+                f"Initializing reranking model: {model_name} on device: {device}"
+            )
             self._rerank_model = CrossEncoder(model_name, device=device)
 
         except Exception as e:
@@ -87,7 +90,9 @@ class EmbeddingManager:
 
             # Get device from config, default to cpu
             device = config.get("pytorch_device", "cpu")
-            logger.info(f"Initializing embedding model: {model_name} on device: {device}")
+            logger.info(
+                f"Initializing embedding model: {model_name} on device: {device}"
+            )
 
             # Only reinitialize if model has changed
             if model_name != self._current_model:
@@ -102,22 +107,30 @@ class EmbeddingManager:
                 except Exception as e:
                     logger.exception(f"Error loading model {model_name}: {e}")
                     # Try to load any available model from the config
-                    available_models = config.get("embeddings", {}).get("models", {}).get("available", [])
+                    available_models = (
+                        config.get("embeddings", {})
+                        .get("models", {})
+                        .get("available", [])
+                    )
                     for fallback_model in available_models:
                         if fallback_model != model_name:
                             try:
-                                logger.info(f"Attempting to load fallback model: {fallback_model}")
-                                self._embedding_function = (
-                                    embedding_functions.SentenceTransformerEmbeddingFunction(
-                                        model_name=fallback_model,
-                                        device="cpu"  # Always use CPU for fallback
-                                    )
+                                logger.info(
+                                    f"Attempting to load fallback model: {fallback_model}"
+                                )
+                                self._embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+                                    model_name=fallback_model,
+                                    device="cpu",  # Always use CPU for fallback
                                 )
                                 self._current_model = fallback_model
-                                logger.info(f"Successfully loaded fallback model: {fallback_model}")
+                                logger.info(
+                                    f"Successfully loaded fallback model: {fallback_model}"
+                                )
                                 break
                             except Exception as e2:
-                                logger.warning(f"Failed to load fallback model {fallback_model}: {e2}")
+                                logger.warning(
+                                    f"Failed to load fallback model {fallback_model}: {e2}"
+                                )
                                 continue
 
         except Exception as e:

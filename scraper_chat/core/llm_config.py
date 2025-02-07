@@ -61,7 +61,7 @@ class RateLimiter:
         # Track when buffer becomes empty
         if initial_count > 0 and len(self.request_times) == 0:
             self.empty_since = now
-            print(f"\n BUFFER EMPTIED - All requests expired\n")
+            print("\n BUFFER EMPTIED - All requests expired\n")
 
     async def wait(self):
         if not self.enabled:

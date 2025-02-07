@@ -126,7 +126,7 @@ async def test_plan_and_execute(plan_mode_executor):
     user_message = "Create a web application for task management"
 
     # Collect yielded values
-     # Collect yielded PlanOutput objects
+    # Collect yielded PlanOutput objects
     yielded_outputs = []
     async for output in plan_mode_executor.plan_and_execute(user_message):
         # Now output is a PlanOutput instance
@@ -134,4 +134,6 @@ async def test_plan_and_execute(plan_mode_executor):
 
     # Verify workflow
     assert any("Execution Phase" in output.message for output in yielded_outputs)
-    assert any("Plan Execution Completed" in output.message for output in yielded_outputs)
+    assert any(
+        "Plan Execution Completed" in output.message for output in yielded_outputs
+    )

@@ -97,6 +97,7 @@ class ChatInterface:
         Process user query across all collections and stream responses.
         Yields tuples of (chunk, excerpts) where chunk is a piece of the response
         and excerpts are the relevant context documents.
+        n_results specifies the number of results per collection.
         """
         if not self.collection_names:
             yield ("Please select at least one documentation source to search.", [])
@@ -119,11 +120,11 @@ class ChatInterface:
             yield ("No relevant information found in the selected documentation.", [])
             return
 
-        # Take top N results across all collections
-        top_results = all_results[:n_results]
+        # Sort all results by relevance score (1 - distance)
+        all_results.sort(key=lambda x: x.get("distance", 1.0))
 
         # Format context and get response
-        context = format_context(top_results)
+        context = format_context(all_results)
         prompt = get_chat_prompt(query, context)
 
         try:
@@ -136,7 +137,7 @@ class ChatInterface:
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_response += content
-                    yield (content, top_results)
+                    yield (content, all_results)
 
             # Add complete response to history
             self._add_to_history("user", query)
@@ -144,7 +145,7 @@ class ChatInterface:
 
         except Exception as e:
             logger.error(f"LLM Error: {str(e)}")
-            yield (f"Error getting response from LLM: {str(e)}", top_results)
+            yield (f"Error getting response from LLM: {str(e)}", all_results)
 
     def get_step_history(self, chat_history: list) -> list:
         """Parses raw chat messages into structured step history"""

@@ -1,5 +1,4 @@
 import pytest
-import os
 import json
 from unittest.mock import patch, MagicMock, call
 import sys
@@ -18,16 +17,12 @@ def mock_config():
     return {
         "embeddings": {
             "models": {
-                "available": [
-                    "model1",
-                    "model2",
-                    "model3"
-                ],
+                "available": ["model1", "model2", "model3"],
                 "default": "model1",
-                "reranker": "cross-encoder/ms-marco-MiniLM-L-6-v2"
+                "reranker": "cross-encoder/ms-marco-MiniLM-L-6-v2",
             }
         },
-        "pytorch_device": "cpu"  # Explicitly set device to cpu for tests
+        "pytorch_device": "cpu",  # Explicitly set device to cpu for tests
     }
 
 
@@ -123,100 +118,111 @@ def test_embedding_manager_singleton():
 
 def test_embedding_model_switching(mock_config_file):
     """Test switching between different embedding models."""
-    with patch("scraper_chat.embeddings.embeddings.embedding_functions.SentenceTransformerEmbeddingFunction") as MockEmbeddingFunction:
+    with patch(
+        "scraper_chat.embeddings.embeddings.embedding_functions.SentenceTransformerEmbeddingFunction"
+    ) as MockEmbeddingFunction:
         # Configure the mock embedding functions
         mock_model1 = MagicMock()
         mock_model2 = MagicMock()
-        
+
         def create_mock_model(model_name, device):
             if model_name == "model1":
                 return mock_model1
             elif model_name == "model2":
                 return mock_model2
-            
+
         MockEmbeddingFunction.side_effect = create_mock_model
-        
+
         # Reset singleton instance
         EmbeddingManager._instance = None
         EmbeddingManager._embedding_function = None
         EmbeddingManager._current_model = None
-        
+
         # Initialize with default model (model1)
         manager = EmbeddingManager()
         assert manager._current_model == "model1"
         assert manager._embedding_function is mock_model1
-        
+
         # Update config to use model2
         config = {
             "embeddings": {
                 "models": {
                     "available": ["model1", "model2", "model3"],
-                    "default": "model2"
+                    "default": "model2",
                 }
             },
-            "pytorch_device": "cpu"
+            "pytorch_device": "cpu",
         }
         with open(mock_config_file, "w") as f:
             json.dump(config, f)
-            
+
         # Reset singleton to force reinitialization
         EmbeddingManager._instance = None
-        
+
         # Create new instance with updated config
         manager = EmbeddingManager()
         assert manager._current_model == "model2"
         assert manager._embedding_function is mock_model2
-        
+
         # Verify the embedding functions were created with correct parameters
-        MockEmbeddingFunction.assert_has_calls([
-            call(model_name="model1", device="cpu"),
-            call(model_name="model2", device="cpu")
-        ])
+        MockEmbeddingFunction.assert_has_calls(
+            [
+                call(model_name="model1", device="cpu"),
+                call(model_name="model2", device="cpu"),
+            ]
+        )
 
 
 def test_embedding_model_fallback(mock_config_file):
     """Test that EmbeddingManager falls back to available models on error."""
-    with patch("scraper_chat.embeddings.embeddings.embedding_functions.SentenceTransformerEmbeddingFunction") as MockEmbeddingFunction:
+    with patch(
+        "scraper_chat.embeddings.embeddings.embedding_functions.SentenceTransformerEmbeddingFunction"
+    ) as MockEmbeddingFunction:
         # Configure mock to fail for model1 but succeed for model2
         mock_model2 = MagicMock()
+
         def create_mock_model(model_name, device):
             if model_name == "model1":
                 raise Exception("Model load error")
             elif model_name == "model2":
                 return mock_model2
-            
+
         MockEmbeddingFunction.side_effect = create_mock_model
-        
+
         # Create config with multiple models
         config = {
             "embeddings": {
                 "models": {
                     "available": ["model1", "model2", "model3"],
-                    "default": "model1"
+                    "default": "model1",
                 }
             },
-            "pytorch_device": "cpu"
+            "pytorch_device": "cpu",
         }
         with open(mock_config_file, "w") as f:
             json.dump(config, f)
-        
+
         # Reset singleton instance
         EmbeddingManager._instance = None
         EmbeddingManager._embedding_function = None
         EmbeddingManager._current_model = None
-        
+
         # Initialize manager - should fall back to model2
         manager = EmbeddingManager()
-        
+
         # Verify fallback behavior
         assert manager._current_model == "model2"
         assert manager._embedding_function is mock_model2
-        
+
         # Verify both attempts were made with correct parameters
-        MockEmbeddingFunction.assert_has_calls([
-            call(model_name="model1", device="cpu"),  # First attempt with default model
-            call(model_name="model2", device="cpu")   # Successful fallback
-        ])
+        MockEmbeddingFunction.assert_has_calls(
+            [
+                call(
+                    model_name="model1", device="cpu"
+                ),  # First attempt with default model
+                call(model_name="model2", device="cpu"),  # Successful fallback
+            ]
+        )
 
 
 def test_reranker_with_empty_documents():
@@ -243,25 +249,22 @@ def test_reranker_with_no_model(mock_config_file):
     # Create config without reranker model
     config = {
         "embeddings": {
-            "models": {
-                "available": ["model1", "model2"],
-                "default": "model1"
-            }
+            "models": {"available": ["model1", "model2"], "default": "model1"}
         }
     }
     with open(mock_config_file, "w") as f:
         json.dump(config, f)
-    
+
     # Reset singleton to force reinitialization
     Reranker._instance = None
     Reranker._rerank_model = None
-    
+
     # Create new instance
     reranker = Reranker()
-    
+
     # Verify no model was loaded
     assert reranker._rerank_model is None
-    
+
     # Verify fallback behavior
     ranked_indices = reranker.rerank("test query", ["doc1", "doc2", "doc3"], top_k=2)
     assert ranked_indices == [0, 1]  # Should return original order

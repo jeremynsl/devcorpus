@@ -1,4 +1,3 @@
-from os import path
 import chromadb
 from chromadb.config import Settings
 import logging
@@ -12,17 +11,21 @@ from hashlib import blake2b
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
+
 logger = logging.getLogger(__name__)
 
 
 # Default DB path, can be overridden for testing
 DEFAULT_DB_PATH = "docs_database.db"
 
+
 class QueryResult(TypedDict):
     url: str
     text: str
     distance: float
     metadata: dict
+
+
 class ChromaHandler:
     """Handler for ChromaDB operations with singleton pattern"""
 
@@ -48,10 +51,11 @@ class ChromaHandler:
     def get_db_path(cls):
         """Get the current DB path"""
         return cls._db_path or DEFAULT_DB_PATH
+
     def get_database_size(cls) -> int:
         """Get the current database size in bytes"""
         db_path = Path(cls.get_db_path())
-        return sum(f.stat().st_size for f in db_path.glob('**/*') if f.is_file())
+        return sum(f.stat().st_size for f in db_path.glob("**/*") if f.is_file())
 
     @classmethod
     def reset(cls):
@@ -76,8 +80,10 @@ class ChromaHandler:
             return
         self._initialized = True
         if not ChromaHandler._client:
-            ChromaHandler._client = chromadb.PersistentClient(path=self.get_db_path(), settings=Settings(anonymized_telemetry=False))
-            
+            ChromaHandler._client = chromadb.PersistentClient(
+                path=self.get_db_path(), settings=Settings(anonymized_telemetry=False)
+            )
+
         self._initialized = True
 
     def __init__(self, collection_name: str = None):
@@ -131,10 +137,10 @@ class ChromaHandler:
 
         # Merge with new metadata, preserving existing fields
         metadata = {
-            **existing_metadata, 
+            **existing_metadata,
             "url": url,
             "content_hash": content_hash,
-            "last_updated": datetime.now().isoformat()
+            "last_updated": datetime.now().isoformat(),
         }
 
         # Skip chunking for GitHub files, use full file content
@@ -163,7 +169,7 @@ class ChromaHandler:
         if existing["ids"]:
             collection.delete(ids=existing["ids"])
         collection.upsert(documents=chunks, ids=chunk_ids, metadatas=chunk_metadatas)
-    
+
     def bulk_add_documents(self, documents: list[tuple[str, str]]) -> None:
         with ThreadPoolExecutor() as executor:
             executor.map(lambda doc: self.add_document(*doc), documents)
@@ -252,8 +258,10 @@ class ChromaHandler:
     def get_available_collections(cls) -> list[str]:
         """Get list of all available collections (websites)."""
         if cls._client is None:
-            cls._client = chromadb.PersistentClient(path=cls.get_db_path(), settings=Settings(anonymized_telemetry=False))
-            
+            cls._client = chromadb.PersistentClient(
+                path=cls.get_db_path(), settings=Settings(anonymized_telemetry=False)
+            )
+
         return cls._client.list_collections()
 
     @classmethod
@@ -262,7 +270,9 @@ class ChromaHandler:
         try:
             if cls._client is None:
                 cls._client = chromadb.PersistentClient(
-                    path=cls.get_db_path(), settings=Settings(anonymized_telemetry=False))
+                    path=cls.get_db_path(),
+                    settings=Settings(anonymized_telemetry=False),
+                )
 
             # Delete from client
             cls._client.delete_collection(collection_name)
@@ -335,34 +345,31 @@ class ChromaHandler:
     def has_matching_content(self, url: str, content: str) -> bool:
         """
         Check if a URL exists in the database and has matching content.
-        
+
         Args:
             url: The URL to check
             content: The content to compare against
-            
+
         Returns:
             bool: True if URL exists and content matches, False otherwise
         """
         try:
             collection_name = self.get_collection_name(url)
             collection = self.get_collection(collection_name)
-            
+
             # Generate hash for the new content
             new_content_hash = blake2b(content.encode(), digest_size=16).hexdigest()
-            
+
             # Get document by URL from metadata
-            results = collection.get(
-                where={"url": url},
-                include=["metadatas"]
-            )
-            
+            results = collection.get(where={"url": url}, include=["metadatas"])
+
             if not results["ids"]:
                 return False
-                
+
             # Check if content hash matches
             existing_hash = results["metadatas"][0].get("content_hash")
             return existing_hash == new_content_hash
-            
+
         except Exception as e:
             logger.debug(f"Error checking content match: {e}")
             return False

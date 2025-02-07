@@ -168,7 +168,7 @@ async def fetch_page(url: str, user_agent: str) -> str:
                 response.raise_for_status()
                 return content
 
-        except aiohttp.ClientResponseError as e:
+        except aiohttp.ClientResponseError:
             logger.warning(
                 f"Received error for {url}. Switching proxy and retrying. (Attempt {attempts}/{max_retries})"
             )
@@ -333,7 +333,11 @@ async def fetch_github_file(
 
 
 async def scrape_recursive(
-    start_url: str, user_agent: str, rate_limit: int, dump_text: bool = False, force_rescrape: bool = False
+    start_url: str,
+    user_agent: str,
+    rate_limit: int,
+    dump_text: bool = False,
+    force_rescrape: bool = False,
 ) -> str:
     """
     Recursively scrape all links from start_url domain.
@@ -350,7 +354,9 @@ async def scrape_recursive(
 
     if "github.com" in start_url and "/blob/" not in start_url:
         logger.info(f"Detected GitHub repository URL: {start_url}")
-        db_handler: Optional[ChromaHandler] = ChromaHandler(ChromaHandler.get_collection_name(start_url))
+        db_handler: Optional[ChromaHandler] = ChromaHandler(
+            ChromaHandler.get_collection_name(start_url)
+        )
         repo_info = await fetch_github_content(start_url)
         progress_bar = tqdm(
             desc="Files Processed", unit="files", total=len(repo_info["files"])
@@ -381,7 +387,9 @@ async def scrape_recursive(
     start_path: str = urlparse(start_url).path or "/"
     visited: set[str] = set()
     to_visit: asyncio.Queue[str] = asyncio.Queue()
-    db_handler: ChromaHandler = ChromaHandler(ChromaHandler.get_collection_name(start_url))
+    db_handler: ChromaHandler = ChromaHandler(
+        ChromaHandler.get_collection_name(start_url)
+    )
     await to_visit.put(remove_anchor(start_url))
     semaphore = asyncio.Semaphore(rate_limit)
     progress_bar = tqdm(desc="Pages Scraped", unit="pages", total=0)
@@ -413,16 +421,23 @@ async def scrape_recursive(
                                 text = html_to_markdown(html)
                                 if text:
                                     # Check if we should skip this URL due to duplicate content
-                                    if not force_rescrape and db_handler.has_matching_content(url, text):
-                                        logger.info(f"Skipping duplicate content: {url}")
+                                    if (
+                                        not force_rescrape
+                                        and db_handler.has_matching_content(url, text)
+                                    ):
+                                        logger.info(
+                                            f"Skipping duplicate content: {url}"
+                                        )
                                         continue
 
                                     # Always store in database
                                     db_handler.add_document(text, url)
-                                    
+
                                     # Optionally save raw text files
                                     if dump_text:
-                                        file_handle.write(f"URL: {url}\n{text}\n\n---\n\n")
+                                        file_handle.write(
+                                            f"URL: {url}\n{text}\n\n---\n\n"
+                                        )
                                         file_handle.flush()
                                     # Extract and queue new links
                                     links = extract_links(html, url, domain, start_path)

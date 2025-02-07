@@ -1,5 +1,4 @@
-
-gradio_css ="""
+gradio_css = """
         /* Supabase-inspired theme */
         :root {
             --background-color: #1c1c1c;
@@ -191,4 +190,44 @@ gradio_css ="""
             border: 1px solid var(--border-color);
             border-radius: 8px;
         }
+        /* Make the parent row force both columns to stretch vertically. */
+#outer-row {
+  align-items: stretch;  /* Ensures columns match height if possible */
+}
+
+/* Give each column a vertical layout without added gap/padding. */
+#left-col, #right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;         /* You can adjust or remove the gap if you like */
+  margin: 0; 
+  padding: 0;
+}
+
+/* Force a minimum height so that the dropdown and textbox match visually.
+   Adjust this to whatever height you want. */
+#left-col .gr-dropdown,
+#right-col .gr-textbox {
+  min-height: 80px; 
+}
+
+
+
+/* If the checkboxes appear to cause extra row height,
+   you can override their container styles, too. */
+#right-col .gr-checkbox .wrap {
+  margin: 0;
+  padding: 0;
+}
+
+/* Example: unify the row alignment so the button + checkbox line up nicely. */
+#right-col .gr-row {
+  align-items: center; 
+  gap: 1rem;   /* Adjust horizontal spacing between button & checkbox */
+}
+
+#status-text {
+padding-top: 10.667px !important;
+padding-bottom: 10.667px !important;
+}
     """

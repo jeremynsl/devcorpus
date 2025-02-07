@@ -9,7 +9,6 @@ import logging
 import sys
 import time
 from urllib.parse import urlparse
-import aiohttp
 import trafilatura
 from bs4 import BeautifulSoup
 import tempfile
@@ -173,7 +172,11 @@ def mock_collection(test_server):
     collection = MagicMock()
     page_url = f"{test_server}/page1"
     collection.query.return_value = {
-        "documents": [["This is a test page with Feature 1 details. Feature 1 is an important component that provides key functionality."]],
+        "documents": [
+            [
+                "This is a test page with Feature 1 details. Feature 1 is an important component that provides key functionality."
+            ]
+        ],
         "metadatas": [[{"url": page_url}]],
         "distances": [[0.5]],
     }
@@ -188,23 +191,27 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
     """Test data passing between components"""
     # Configure ChromaDB to use test path
     ChromaHandler.configure(test_db)
-    
+
     with patch("scraper_chat.config.CONFIG_FILE", test_config):
         try:
             # 1. Scrape specific page with timeout
             page_url = f"{test_server}/page1"
 
             # Mock ChromaDB client and collection
-            with patch.object(ChromaHandler, '_client') as mock_client:
+            with patch.object(ChromaHandler, "_client") as mock_client:
                 mock_client.get_or_create_collection.return_value = mock_collection
 
                 # Mock the chunking manager to return actual content
-                with patch.object(ChromaHandler, '_chunking_manager') as mock_chunking_manager:
+                with patch.object(
+                    ChromaHandler, "_chunking_manager"
+                ) as mock_chunking_manager:
                     mock_chunking_manager.chunk_text.return_value = [
                         "This is a test page with Feature 1 details. Feature 1 is an important component that provides key functionality."
                     ]
 
-                    async def mock_scrape(url, user_agent, rate_limit=1, dump_text=True):
+                    async def mock_scrape(
+                        url, user_agent, rate_limit=1, dump_text=True
+                    ):
                         logger.debug(f"Mock scraping {url}")
                         # Mock HTML content that contains Feature 1
                         html = """
@@ -226,7 +233,9 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
                             # Add document
                             db = ChromaHandler(collection_name)
                             db.add_document(text, url)
-                            logger.debug(f"Added document to collection {collection_name}")
+                            logger.debug(
+                                f"Added document to collection {collection_name}"
+                            )
 
                     async with asyncio.timeout(10):  # Increase timeout for scraping
                         await mock_scrape(page_url, "TestBot/1.0", dump_text=True)

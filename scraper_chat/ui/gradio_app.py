@@ -1,15 +1,19 @@
 import warnings
-warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.utils.hub")
-warnings.filterwarnings("ignore", category=UserWarning, module="pydantic._internal._config")
+
+warnings.filterwarnings(
+    "ignore", category=FutureWarning, module="transformers.utils.hub"
+)
+warnings.filterwarnings(
+    "ignore", category=UserWarning, module="pydantic._internal._config"
+)
 
 import gradio as gr
 from scraper_chat.logger.logging_config import configure_logging, logger
-from ..database.chroma_handler import ChromaHandler
-from ..chat.chat_interface import ChatInterface
-from ..scraper.scraper import scrape_recursive
-from ..config import CONFIG_FILE, load_config
-from ..chunking.chunking import ChunkingManager
-from ..core.llm_config import LLMConfig
+from scraper_chat.database.chroma_handler import ChromaHandler
+from scraper_chat.chat.chat_interface import ChatInterface
+from scraper_chat.scraper.scraper import scrape_recursive
+from scraper_chat.chunking.chunking import ChunkingManager
+from scraper_chat.core.llm_config import LLMConfig
 import json
 from typing import List
 import asyncio
@@ -18,15 +22,16 @@ from scraper_chat.ui.gradio_settings import create_settings_tab
 from typing import Tuple, AsyncGenerator
 import re
 from scraper_chat.embeddings.embeddings import EmbeddingManager
-from scraper_chat.config.config import load_config, save_config
+from scraper_chat.config.config import load_config, save_config, CONFIG_FILE
 from scraper_chat.ui.gradio_css import gradio_css
 
 configure_logging()
 
-logging.info("Launching ScraperChat")
+logging.info("Launching DevCorpus")
 # Load config
 logging.info("Loading config")
 config = load_config(CONFIG_FILE)
+
 
 def colorize_log(record: str) -> str:
     """Add color to log messages based on level"""
@@ -81,7 +86,7 @@ class GradioChat:
             choices=collection_choices, value=valid_selections, multiselect=True
         ), "Collections refreshed"
 
-    def get_formatted_collections(self) -> List[Tuple[str, str]]: 
+    def get_formatted_collections(self) -> List[Tuple[str, str]]:
         """Get collection list with summary indicators for initial dropdown"""
         db = ChromaHandler()
         collections = db.get_available_collections()
@@ -104,7 +109,9 @@ class GradioChat:
 
         return collection_choices
 
-    def delete_collection(self, collections_to_delete: List[str]) -> Tuple[List[str], List[str]]:
+    def delete_collection(
+        self, collections_to_delete: List[str]
+    ) -> Tuple[List[str], List[str]]:
         """Delete selected collections and refresh the list"""
         if not collections_to_delete:
             return "Please select collections to delete", gr.Dropdown()
@@ -317,7 +324,10 @@ class GradioChat:
                 )
 
         except Exception as e:
-            yield f'<span style="color: #ff4444">Error: {str(e)}</span>', "Error occurred"
+            yield (
+                f'<span style="color: #ff4444">Error: {str(e)}</span>',
+                "Error occurred",
+            )
 
         finally:
             # Clean up tasks and handlers
@@ -339,7 +349,9 @@ class GradioChat:
                 root_logger = logging.getLogger()
                 root_logger.removeHandler(progress_handler)
 
-    async def chat(self, message: str, history: list, collections: list, model: str) -> AsyncGenerator[Tuple[List[dict], str], None]:
+    async def chat(
+        self, message: str, history: list, collections: list, model: str
+    ) -> AsyncGenerator[Tuple[List[dict], str], None]:
         """Handle chat interaction with streaming"""
         if not self.chat_interface:
             history.append(
@@ -389,7 +401,9 @@ class GradioChat:
             history[-1]["content"] = error_msg
             yield history, error_msg
 
-    def initialize_chat(self, collections: list, model: str, rate_limit: int = 9) -> Tuple[List[dict], str, str]:
+    def initialize_chat(
+        self, collections: list, model: str, rate_limit: int = 9
+    ) -> Tuple[List[dict], str, str]:
         """Initialize (or switch) chat interface"""
         if not collections:
             return [], "Please select at least one documentation source.", ""
@@ -517,7 +531,9 @@ class GradioChat:
             return error_msg
 
 
-async def process_chat(msg, hist, colls, mdl, pm, chat_app: GradioChat) -> AsyncGenerator[Tuple[List[dict], str], None]:
+async def process_chat(
+    msg, hist, colls, mdl, pm, chat_app: GradioChat
+) -> AsyncGenerator[Tuple[List[dict], str], None]:
     """
     Handle both Plan Mode and regular chat.
 
@@ -569,29 +585,33 @@ def load_doc_links():
     try:
         with open("docs.md", "r") as f:
             content = f.read()
-        
+
         # Parse the markdown table using regex
         links = []
         current_category = None
-        for line in content.split('\n'):
-            if line.startswith('## '):
+        for line in content.split("\n"):
+            if line.startswith("## "):
                 current_category = line[3:].strip()
-            elif '|' in line and '[' in line and ']' in line and 'http' in line:  # Only match lines with URLs
+            elif (
+                "|" in line and "[" in line and "]" in line and "http" in line
+            ):  # Only match lines with URLs
                 # Skip header and separator lines
-                if '---' in line or 'Project' in line:
+                if "---" in line or "Project" in line:
                     continue
-                parts = [p.strip() for p in line.split('|') if p.strip()]
+                parts = [p.strip() for p in line.split("|") if p.strip()]
                 if len(parts) >= 2:  # At least project and docs link
                     project = parts[0]
-                    url_match = re.search(r'\((.*?)\)', parts[1])
+                    url_match = re.search(r"\((.*?)\)", parts[1])
                     if url_match:
                         url = url_match.group(1)
                         # Check if we have tags
-                        tags = parts[2].split(',') if len(parts) > 2 else []
+                        tags = parts[2].split(",") if len(parts) > 2 else []
                         tags = [tag.strip() for tag in tags]
                         tag_text = f" [🏷️ {', '.join(tags)}]" if tags else ""
-                        links.append(f"{current_category} - {project}: {url} - {tag_text}")
-        
+                        links.append(
+                            f"{current_category} - {project}: {url} - {tag_text}"
+                        )
+
         return [""] + sorted(links)  # Empty string for manual URL entry
     except Exception as e:
         logger.error(f"Error loading doc links: {e}")
@@ -602,336 +622,341 @@ def create_demo():
     """Create the Gradio demo Blocks layout."""
     # Load config for embedding models
     config = load_config(CONFIG_FILE)
-    available_models = config.get("embeddings", {}).get("models", {}).get("available", [])
+    available_models = (
+        config.get("embeddings", {}).get("models", {}).get("available", [])
+    )
     default_model = config.get("embeddings", {}).get("models", {}).get("default")
-    
+
     def update_embedding_model(model_name):
         try:
             # Update config
             config = load_config(CONFIG_FILE)
             config["embeddings"]["models"]["default"] = model_name
             save_config(config, CONFIG_FILE)
-            
+
             # Reinitialize embedding manager
             EmbeddingManager._instance = None
             EmbeddingManager()
-            
+
             return f"Successfully switched to embedding model: {model_name}"
         except Exception as e:
             return f"Error switching embedding model: {str(e)}"
-    
+
     chat_app = GradioChat()
 
-    with gr.Blocks(
-        title="Documentation Chat & Scraper",
-        css=gradio_css
-    ) as demo:
-            # Configure queue with default settings
-            demo.queue(default_concurrency_limit=1)
+    with gr.Blocks(title="Documentation Chat & Scraper", css=gradio_css) as demo:
+        # Configure queue with default settings
+        demo.queue(default_concurrency_limit=1)
 
-            with gr.Tabs():
-                with gr.Tab("Scraper"):
-                    gr.Markdown(
-                        """
+        with gr.Tabs():
+            with gr.Tab("Scraper"):
+                gr.Markdown(
+                    """
                         ## Web Scraper
                         Enter a URL to scrape documentation from a website.
                         """
-                    )
-                    
-                    # Add dropdown for predefined documentation links
-                    doc_links = gr.Dropdown(
-                        choices=load_doc_links(),
-                        label="Select Documentation",
-                        info="Choose from predefined documentation links or enter a custom URL below"
-                    )
-                    
-                    url = gr.Textbox(
-                        label="URL",
-                        info="Enter the URL of the documentation to scrape"
-                    )
-                    
-                    # Add embedding model selector
-                    with gr.Row():
-                        embedding_model = gr.Dropdown(
-                            choices=available_models,
-                            value=default_model,
-                            label="Embedding Model",
-                            info="Select the model to use for creating document embeddings"
-                        )
-                        embedding_status = gr.Textbox(
-                            info="Status",
-                            label="Model Status",
-                            interactive=False
-                        )
-                    
-                    # Connect embedding model change event
-                    embedding_model.change(
-                        fn=update_embedding_model,
-                        inputs=[embedding_model],
-                        outputs=[embedding_status]
-                    )
-                    
-                    def update_url(selected):
-                        if not selected:
-                            return ""
-                        # Get the part after the colon which contains the URL and the tags.
-                        url_with_tags = selected.split(": ")[-1]
-                        # Split again on ' - ' and take the first part (the URL).
-                        url = url_with_tags.split(" - ")[0].strip()
-                        return url
+                )
 
-                    
-                    # Update URL textbox when a documentation link is selected
-                    doc_links.change(
-                        fn=update_url,
-                        inputs=[doc_links],
-                        outputs=[url]
+                # Add dropdown for predefined documentation links
+                doc_links = gr.Dropdown(
+                    choices=load_doc_links(),
+                    label="Select Documentation",
+                    info="Choose from predefined documentation links or enter a custom URL below",
+                )
+
+                url = gr.Textbox(
+                    label="URL", info="Enter the URL of the documentation to scrape"
+                )
+
+                # Add embedding model selector
+                with gr.Row():
+                    embedding_model = gr.Dropdown(
+                        choices=available_models,
+                        value=default_model,
+                        label="Embedding Model",
+                        info="Select the model to use for creating document embeddings",
+                    )
+                    embedding_status = gr.Textbox(
+                        info="Status", label="Model Status", interactive=False
                     )
 
-                    with gr.Row():
-                        dump_text = gr.Checkbox(
-                            label="Save Text Files",
-                            value=False,
-                            info="Save the scraped content as raw text files"
-                        )
-                        force_rescrape = gr.Checkbox(
-                            label="Force Rescrape",
-                            value=False,
-                            info="Rescrape pages even if they already exist in the database"
-                        )
-                        use_cluster = gr.Checkbox(
-                            label="Use Cluster Chunking",
-                            value=False,
-                            info="More resource-intensive but better for retrieval"
-                        )
-                    scrape_btn = gr.Button("Start Scraping", variant="primary", scale=1)
+                # Connect embedding model change event
+                embedding_model.change(
+                    fn=update_embedding_model,
+                    inputs=[embedding_model],
+                    outputs=[embedding_status],
+                )
 
-                    tqdm_status = gr.Textbox(
-                        label="Progress",
-                        value="Ready to scrape...",
-                        interactive=False,
-                        show_label=False,
-                        elem_classes="tqdm-status",
+                def update_url(selected):
+                    if not selected:
+                        return ""
+                    # Get the part after the colon which contains the URL and the tags.
+                    url_with_tags = selected.split(": ")[-1]
+                    # Split again on ' - ' and take the first part (the URL).
+                    url = url_with_tags.split(" - ")[0].strip()
+                    return url
+
+                # Update URL textbox when a documentation link is selected
+                doc_links.change(fn=update_url, inputs=[doc_links], outputs=[url])
+
+                with gr.Row():
+                    dump_text = gr.Checkbox(
+                        label="Save Text Files",
+                        value=False,
+                        info="Save the scraped content as raw text files",
                     )
-
-                    scrape_progress = gr.HTML(
-                        # label="Scraping Progress",
-                        value="Progress will appear here...",
-                        show_label=False,
-                        container=True,
-                        elem_classes="scraping-progress",
+                    force_rescrape = gr.Checkbox(
+                        label="Force Rescrape",
+                        value=False,
+                        info="Rescrape pages even if they already exist in the database",
                     )
+                    use_cluster = gr.Checkbox(
+                        label="Use Cluster Chunking",
+                        value=False,
+                        info="More resource-intensive but better for retrieval",
+                    )
+                scrape_btn = gr.Button("Start Scraping", variant="primary", scale=1)
 
-                with gr.Tab("Chat"):
-                    with gr.Row():
-                        with gr.Column(scale=4):
+                tqdm_status = gr.Textbox(
+                    label="Progress",
+                    value="Ready to scrape...",
+                    interactive=False,
+                    show_label=False,
+                    elem_classes="tqdm-status",
+                )
+
+                scrape_progress = gr.HTML(
+                    # label="Scraping Progress",
+                    value="Progress will appear here...",
+                    show_label=False,
+                    container=True,
+                    elem_classes="scraping-progress",
+                )
+
+            with gr.Tab("Chat"):
+                with gr.Row():
+                    with gr.Row(elem_id="outer-row"):
+                        # Left column: collections dropdown, then row of model settings
+                        with gr.Column(elem_id="left-col"):
                             collections = gr.Dropdown(
-                                choices=chat_app.get_formatted_collections(),  # Use formatted collections on initial load
+                                choices=chat_app.get_formatted_collections(),
                                 label="Select Documentation Sources",
-                                info="Choose one or more collections to search",
                                 multiselect=True,
-                                value=[],  # Start with no selection
+                                value=[],
                                 container=True,
                             )
-                        with gr.Column(scale=1):
-                            model = gr.Dropdown(
-                                choices=config["chat"]["models"]["available"],
-                                value=config["chat"]["models"]["default"],
-                                label="Model",
-                                container=True,
-                                scale=2,
-                            )
-                            rate_limit = gr.Number(
-                                value=9,
-                                label="Rate Limit (RPM)",
-                                info="API calls per minute",
-                                minimum=1,
-                                maximum=60,
-                                step=1,
-                            )
-                            plan_mode = gr.Checkbox(
-                                label="Plan Mode",
-                                value=False,
-                                info="Toggle between Planning and Execution phases"
-                            )
+
                             with gr.Row():
-                                add_summaries_btn = gr.Button(
-                                    "📝 Add Summaries", variant="secondary"
+                                model = gr.Dropdown(
+                                    choices=config["chat"]["models"]["available"],
+                                    value=config["chat"]["models"]["default"],
+                                    label="Model",
+                                    container=True,
                                 )
-                                regenerate_summaries = gr.Checkbox(
-                                    label="Regenerate Existing",
+                                rate_limit = gr.Number(
+                                    value=9,
+                                    label="API Rate Limit (RPM)",
+                                    minimum=1,
+                                    maximum=60,
+                                    step=1,
+                                )
+                                plan_mode = gr.Checkbox(
+                                    label="Plan Mode",
                                     value=False,
-                                    info="If checked, will regenerate existing summaries"
+                                    info="Experimental Planning",
                                 )
-                        with gr.Column(scale=1):
-                            delete_btn = gr.Button("🗑️ Delete Collection", variant="secondary")
-                            refresh_btn = gr.Button("🔄 Refresh Collections")
+
+                        # Right column: status, then two rows of buttons/checkbox
+                        with gr.Column(elem_id="right-col"):
                             status_text = gr.Textbox(
                                 label="Status",
                                 interactive=False,
                                 container=True,
-                                # lines=10  # Make it bigger to show debug info
+                                elem_id="status-text",
                             )
 
-                    with gr.Row():
-                        chatbot = gr.Chatbot(
-                            value=[],
-                            type="messages",  # Use modern message format
-                            label="Chat History",
-                            height=400,
-                            show_label=True,
-                            container=True,
-                            elem_classes="chat-window",
-                            render_markdown=True,
-                            layout="bubble",  # Better layout for markdown content
-                            line_breaks=True,  # Preserve line breaks in messages
-                            latex_delimiters=[  # Support LaTeX for math
-                                {"left": "$$", "right": "$$", "display": True},
-                                {"left": "$", "right": "$", "display": False},
-                            ],
-                            sanitize_html=True,  # Safely render HTML/markdown
-                        )
+                            # First row of button + checkbox
+                            with gr.Row(equal_height=True):
+                                add_summaries_btn = gr.Button(
+                                    "📝 Add Summaries",
+                                    variant="secondary",
+                                    min_width=300,
+                                )
+                                regenerate_summaries = gr.Checkbox(
+                                    label="Regenerate Summaries",
+                                    value=False,
+                                    min_width=350,
+                                )
 
-                    with gr.Row():
-                        message = gr.Textbox(
-                            label="Your Question",
-                            placeholder="Select documentation source(s) above, then ask a question...",
-                            show_label=False,
-                            container=False,
-                            scale=8,
-                        )
-                        submit_btn = gr.Button(
-                            "Send", variant="primary", scale=1, min_width=100
-                        )
+                            # Second row of two buttons
+                            with gr.Row(equal_height=True):
+                                delete_btn = gr.Button(
+                                    "🗑️ Delete Collection", variant="secondary"
+                                )
+                                refresh_btn = gr.Button(
+                                    "🔄 Refresh Collections", variant="secondary"
+                                )
 
-                    # Create accordion but don't update its state
-                    accordion = gr.Accordion("References", open=False)
-                    with accordion:
-                        references = gr.Markdown(
-                            value="No references available yet.", show_label=False
-                        )
-
-                    # Event handlers
-
-                    # Scraping events
-                    scrape_btn.click(
-                        fn=chat_app.start_scraping,
-                        inputs=[
-                            url,
-                            dump_text,
-                            force_rescrape,
-                            use_cluster,
-                            scrape_progress,
-                            tqdm_status,
+                with gr.Row():
+                    chatbot = gr.Chatbot(
+                        value=[],
+                        type="messages",  # Use modern message format
+                        label="Chat History",
+                        height=400,
+                        show_label=True,
+                        container=True,
+                        elem_classes="chat-window",
+                        render_markdown=True,
+                        layout="bubble",  # Better layout for markdown content
+                        line_breaks=True,  # Preserve line breaks in messages
+                        latex_delimiters=[  # Support LaTeX for math
+                            {"left": "$$", "right": "$$", "display": True},
+                            {"left": "$", "right": "$", "display": False},
                         ],
-                        outputs=[scrape_progress, tqdm_status],
-                        api_name="start_scraping",  # Add API name for better queue handling
-                        show_progress=True,  # Show progress in the UI
-                        concurrency_limit=1,  # Only allow one scraping job at a time
+                        sanitize_html=True,  # Safely render HTML/markdown
                     )
 
-                    # Collection management events
-                    refresh_btn.click(
-                        fn=chat_app.refresh_databases,
-                        inputs=[collections],
-                        outputs=[collections, status_text],
-                        show_progress=False,
+                with gr.Row():
+                    message = gr.Textbox(
+                        label="Your Question",
+                        placeholder="Select documentation source(s) above, then ask a question...",
+                        show_label=False,
+                        container=False,
+                        scale=8,
+                    )
+                    submit_btn = gr.Button(
+                        "Send", variant="primary", scale=1, min_width=100
                     )
 
-                    delete_btn.click(
-                        fn=chat_app.delete_collection,
-                        inputs=[collections],
-                        outputs=[status_text, collections],
-                        show_progress=True,
-                    ).then(
-                        fn=lambda: None,  # Clear chat history after deletion
-                        outputs=[chatbot],
+                # Create accordion but don't update its state
+                accordion = gr.Accordion("References", open=False)
+                with accordion:
+                    references = gr.Markdown(
+                        value="No references available yet.", show_label=False
                     )
 
-                    # Database or LLM dropdown changes
-                    collections.change(
-                        fn=chat_app.initialize_chat,
-                        inputs=[collections, model, rate_limit],
-                        outputs=[chatbot, status_text, references],
-                    )
-                    model.change(
-                        fn=chat_app.initialize_chat,
-                        inputs=[collections, model, rate_limit],
-                        outputs=[chatbot, status_text, references],
-                    )
-                    rate_limit.change(
-                        fn=chat_app.initialize_chat,
-                        inputs=[collections, model, rate_limit],
-                        outputs=[chatbot, status_text, references],
-                    )
+                # Event handlers
 
-                    async def handle_submit(msg, hist, colls, mdl, pm):
-                        """
-                        Handle the submit action for both Plan Mode and regular chat.
-                        """
-                        # Process the chat and yield results
-                        async for updated_history, refs in process_chat(
-                            msg, hist, colls, mdl, pm, chat_app
-                        ):
-                            yield updated_history, refs
+                # Scraping events
+                scrape_btn.click(
+                    fn=chat_app.start_scraping,
+                    inputs=[
+                        url,
+                        dump_text,
+                        force_rescrape,
+                        use_cluster,
+                        scrape_progress,
+                        tqdm_status,
+                    ],
+                    outputs=[scrape_progress, tqdm_status],
+                    api_name="start_scraping",  # Add API name for better queue handling
+                    show_progress=True,  # Show progress in the UI
+                    concurrency_limit=1,  # Only allow one scraping job at a time
+                )
 
-                    submit_btn.click(
-                        fn=handle_submit,
-                        inputs=[message, chatbot, collections, model, plan_mode],
-                        outputs=[chatbot, references],
-                        queue=True,
-                    ).then(fn=lambda: "", outputs=message)
+                # Collection management events
+                refresh_btn.click(
+                    fn=chat_app.refresh_databases,
+                    inputs=[collections],
+                    outputs=[collections, status_text],
+                    show_progress=False,
+                )
 
-                    # Send on ENTER
-                    message.submit(
-                        fn=handle_submit,
-                        inputs=[message, chatbot, collections, model, plan_mode],
-                        outputs=[chatbot, references],
-                        queue=True,
-                    ).then(fn=lambda: "", outputs=message)
+                delete_btn.click(
+                    fn=chat_app.delete_collection,
+                    inputs=[collections],
+                    outputs=[status_text, collections],
+                    show_progress=True,
+                ).then(
+                    fn=lambda: None,  # Clear chat history after deletion
+                    outputs=[chatbot],
+                )
 
-                    # Connect add summaries button
-                    add_summaries_btn.click(
-                        fn=chat_app.generate_summaries,
-                        inputs=[collections, model, regenerate_summaries],
-                        outputs=[status_text],
-                    )
+                # Database or LLM dropdown changes
+                collections.change(
+                    fn=chat_app.initialize_chat,
+                    inputs=[collections, model, rate_limit],
+                    outputs=[chatbot, status_text, references],
+                )
+                model.change(
+                    fn=chat_app.initialize_chat,
+                    inputs=[collections, model, rate_limit],
+                    outputs=[chatbot, status_text, references],
+                )
+                rate_limit.change(
+                    fn=chat_app.initialize_chat,
+                    inputs=[collections, model, rate_limit],
+                    outputs=[chatbot, status_text, references],
+                )
 
-                with gr.Tab("Settings"):
-                    save_button, status_output = create_settings_tab()
-                    
-                    # When settings are saved, refresh the global config and UI components
-                    def refresh_app_config():
-                        """Refresh the global config and update UI components"""
-                        global config
-                        with open("scraper_config.json", "r") as f:
-                            config = json.load(f)
-                        
-                        # Return updates for both chat and embedding model dropdowns
-                        return [
-                            gr.update(
-                                choices=config["chat"]["models"]["available"],
-                                value=config["chat"]["models"]["default"]
-                            ),
-                            gr.update(
-                                choices=config["embeddings"]["models"]["available"],
-                                value=config["embeddings"]["models"]["default"]
-                            ),
-                            "Settings updated - Models refreshed"
-                        ]
-                    
-                    # Connect both save and refresh buttons to update components
-                    save_button.click(
-                        fn=refresh_app_config,
-                        inputs=[],
-                        outputs=[model, embedding_model, status_output]
-                    ).then(  # Also reinitialize the chat interface
-                        fn=chat_app.initialize_chat,
-                        inputs=[collections, model, rate_limit],
-                        outputs=[chatbot, status_text, references]
-                    )
-                    
-            return demo
+                async def handle_submit(msg, hist, colls, mdl, pm):
+                    """
+                    Handle the submit action for both Plan Mode and regular chat.
+                    """
+                    # Process the chat and yield results
+                    async for updated_history, refs in process_chat(
+                        msg, hist, colls, mdl, pm, chat_app
+                    ):
+                        yield updated_history, refs
+
+                submit_btn.click(
+                    fn=handle_submit,
+                    inputs=[message, chatbot, collections, model, plan_mode],
+                    outputs=[chatbot, references],
+                    queue=True,
+                ).then(fn=lambda: "", outputs=message)
+
+                # Send on ENTER
+                message.submit(
+                    fn=handle_submit,
+                    inputs=[message, chatbot, collections, model, plan_mode],
+                    outputs=[chatbot, references],
+                    queue=True,
+                ).then(fn=lambda: "", outputs=message)
+
+                # Connect add summaries button
+                add_summaries_btn.click(
+                    fn=chat_app.generate_summaries,
+                    inputs=[collections, model, regenerate_summaries],
+                    outputs=[status_text],
+                )
+
+            with gr.Tab("Settings"):
+                save_button, status_output = create_settings_tab()
+
+                # When settings are saved, refresh the global config and UI components
+                def refresh_app_config():
+                    """Refresh the global config and update UI components"""
+                    global config
+                    with open("scraper_config.json", "r") as f:
+                        config = json.load(f)
+
+                    # Return updates for both chat and embedding model dropdowns
+                    return [
+                        gr.update(
+                            choices=config["chat"]["models"]["available"],
+                            value=config["chat"]["models"]["default"],
+                        ),
+                        gr.update(
+                            choices=config["embeddings"]["models"]["available"],
+                            value=config["embeddings"]["models"]["default"],
+                        ),
+                        "Settings updated - Models refreshed",
+                    ]
+
+                # Connect both save and refresh buttons to update components
+                save_button.click(
+                    fn=refresh_app_config,
+                    inputs=[],
+                    outputs=[model, embedding_model, status_output],
+                ).then(  # Also reinitialize the chat interface
+                    fn=chat_app.initialize_chat,
+                    inputs=[collections, model, rate_limit],
+                    outputs=[chatbot, status_text, references],
+                )
+
+        return demo
+
 
 if __name__ == "__main__":
     demo = create_demo()
