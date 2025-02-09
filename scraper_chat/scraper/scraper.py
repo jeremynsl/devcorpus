@@ -1,3 +1,13 @@
+"""
+Web scraping module with support for:
+- Recursive crawling with domain/path restrictions
+- Proxy failover and rate limiting
+- Robots.txt and sitemap.xml compliance
+- GitHub repository scraping
+- Content deduplication
+- Markdown conversion
+"""
+
 import asyncio
 import aiohttp
 from typing import Optional, List, Dict, Any
@@ -14,27 +24,53 @@ from ..text_processor import TextProcessor
 from trafilatura.settings import use_config
 from ..database.chroma_handler import ChromaHandler
 from scraper_chat.logger.logging_config import logger
+import re
+from datetime import datetime
 
 text_processor = TextProcessor()
 
 
 def normalize_url(url: str) -> str:
-    """Normalize URL by removing fragments and query parameters."""
+    """
+    Normalize URL by removing fragments and query parameters.
+
+    Args:
+        url: URL to normalize
+
+    Returns:
+        Normalized URL with only scheme, netloc, and path
+    """
     parsed = urlparse(url)
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
 
 def is_valid_url(url: str) -> bool:
-    """Check if URL is valid and uses http(s) scheme."""
+    """
+    Validate URL format and scheme.
+
+    Args:
+        url: URL to validate
+
+    Returns:
+        True if URL is valid and uses http(s) scheme
+    """
     try:
         parsed = urlparse(url)
         return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-    except Exception:  # Consider catching a more specific exception
+    except Exception:
         return False
 
 
 def get_domain(url: str) -> str:
-    """Extract domain from URL."""
+    """
+    Extract domain from URL.
+
+    Args:
+        url: URL to extract domain from
+
+    Returns:
+        Domain string or empty string if invalid
+    """
     try:
         return urlparse(url).netloc
     except Exception:
@@ -42,15 +78,33 @@ def get_domain(url: str) -> str:
 
 
 def is_same_domain(url1: str, url2: str) -> bool:
-    """Check if two URLs belong to the same domain."""
+    """
+    Check if two URLs belong to same domain.
+
+    Args:
+        url1: First URL
+        url2: Second URL
+
+    Returns:
+        True if URLs have same domain
+    """
     return get_domain(url1) == get_domain(url2)
 
 
 def should_follow_link(url: str, base_domain: str, base_path: str) -> bool:
     """
-    Determine if link should be followed based on domain and path restrictions.
+    Check if link should be followed based on domain and path.
 
-    Note: `base_domain` should be a full URL (or ensure it is normalized).
+    Args:
+        url: URL to check
+        base_domain: Domain to restrict to
+        base_path: Path prefix to restrict to
+
+    Returns:
+        True if link should be followed
+
+    Note:
+        base_domain should be normalized full URL
     """
     if not is_valid_url(url):
         return False
@@ -64,8 +118,16 @@ def should_follow_link(url: str, base_domain: str, base_path: str) -> bool:
 
 def get_output_filename(url: str) -> str:
     """
-    Convert URL to a valid filename by removing special characters and slashes.
-    Example: https://svelte.dev/docs/ becomes svelte_dev.txt
+    Generate filesystem-safe output filename from URL.
+
+    Args:
+        url: Source URL
+
+    Returns:
+        Path to output file
+
+    Example:
+        https://svelte.dev/docs/ -> svelte_dev.txt
     """
     parsed = urlparse(url)
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -88,8 +150,16 @@ proxies_list: List[str] = []  # Will be populated after loading config
 
 def remove_anchor(url: str) -> str:
     """
-    Remove the anchor/fragment from a URL so that
-    http://example.com/page#something == http://example.com/page
+    Remove fragment identifier from URL.
+
+    Args:
+        url: URL to process
+
+    Returns:
+        URL without fragment
+
+    Example:
+        http://example.com/page#section -> http://example.com/page
     """
     parsed = urlparse(url)
     parsed = parsed._replace(fragment="")
@@ -98,8 +168,12 @@ def remove_anchor(url: str) -> str:
 
 async def get_next_proxy() -> Optional[str]:
     """
-    Returns the currently selected proxy from the proxies_list.
-    If none exist, return None.
+    Get current proxy from rotation.
+
+    Returns:
+        Proxy URL or None if no proxies configured
+
+    Thread-safe via proxy_lock
     """
     async with proxy_lock:
         if not proxies_list:
@@ -109,7 +183,10 @@ async def get_next_proxy() -> Optional[str]:
 
 async def switch_to_next_proxy() -> None:
     """
-    Rotate to the next proxy in proxies_list (for failover).
+    Rotate to next proxy in list.
+
+    Thread-safe via proxy_lock.
+    Wraps around to start if at end of list.
     """
     async with proxy_lock:
         global current_proxy_index
@@ -122,10 +199,26 @@ async def switch_to_next_proxy() -> None:
 ###############################################################################
 # Fetching / Parsing
 ###############################################################################
+
+
 async def fetch_page(url: str, user_agent: str) -> str:
     """
-    Attempt to fetch the given URL (HTML) with up to len(proxies_list) retries
-    if proxies are available and we encounter certain HTTP errors (e.g., 403).
+    Fetch page content with proxy failover.
+
+    Args:
+        url: URL to fetch
+        user_agent: User agent string
+
+    Returns:
+        Page content as string
+
+    Raises:
+        RuntimeError: If all fetch attempts fail
+
+    Features:
+    - Automatic proxy rotation on failure
+    - Retries for 403/429 status codes
+    - Configurable timeout
     """
     max_retries: int = max(1, len(proxies_list) or 1)
     attempts: int = 0
@@ -191,7 +284,23 @@ async def fetch_page(url: str, user_agent: str) -> str:
 
 def extract_links(html: str, base_url: str, domain: str, start_path: str) -> List[str]:
     """
-    Extract all in-domain links from the HTML.
+    Extract and filter in-domain links from HTML.
+
+    Args:
+        html: HTML content
+        base_url: Base URL for resolving relative links
+        domain: Domain to restrict links to
+        start_path: Path prefix to restrict links to
+
+    Returns:
+        List of absolute URLs matching domain/path
+
+    Features:
+    - Tries trafilatura metadata first
+    - Falls back to BeautifulSoup parsing
+    - Resolves relative links
+    - Removes duplicates
+    - Filters by domain and path
     """
     filtered_links: List[str] = []
 
@@ -243,7 +352,18 @@ def extract_links(html: str, base_url: str, domain: str, start_path: str) -> Lis
 
 def html_to_markdown(html: str) -> str:
     """
-    Convert HTML to Markdown text using trafilatura.
+    Convert HTML to Markdown with fallback.
+
+    Args:
+        html: HTML content
+
+    Returns:
+        Markdown text
+
+    Features:
+    - Uses trafilatura with custom config
+    - Falls back to BeautifulSoup if trafilatura fails
+    - Preserves formatting but removes links
     """
     cleaned_html: str = text_processor.preprocess_html(html)
     config = use_config()
@@ -263,7 +383,20 @@ def html_to_markdown(html: str) -> str:
 
 async def fetch_github_content(url: str) -> Dict[str, Any]:
     """
-    Fetch content from a GitHub repository using the GitHub API.
+    Fetch repository contents via GitHub API.
+
+    Args:
+        url: GitHub repository URL
+
+    Returns:
+        Dict containing:
+        - owner: Repository owner
+        - repo: Repository name
+        - branch: Default branch
+        - files: List of file objects
+
+    Note:
+        Requires GITHUB_TOKEN environment variable
     """
     path = urlparse(url).path.strip("/")
     owner, repo = path.split("/")[:2]
@@ -321,7 +454,21 @@ async def fetch_github_content(url: str) -> Dict[str, Any]:
 async def fetch_github_file(
     owner: str, repo: str, path: str, headers: Dict[str, str]
 ) -> str:
-    """Fetch a single file's content from GitHub."""
+    """
+    Fetch single file from GitHub repository.
+
+    Args:
+        owner: Repository owner
+        repo: Repository name
+        path: File path in repository
+        headers: GitHub API headers
+
+    Returns:
+        File content as string
+
+    Raises:
+        Exception: If file fetch fails
+    """
     async with aiohttp.ClientSession() as session:
         async with session.get(
             f"https://api.github.com/repos/{owner}/{repo}/contents/{path}",
@@ -336,66 +483,83 @@ async def fetch_github_file(
 
 async def check_sitemap(url: str, user_agent: str) -> Optional[List[str]]:
     """
-    Check for sitemap.xml and parse URLs from it.
-    Will check both the given URL path and the root domain.
+    Find and parse sitemap.xml files.
+
+    Args:
+        url: Base URL
+        user_agent: User agent string
+
+    Returns:
+        List of URLs from sitemap or None if not found
+
+    Features:
+    - Checks multiple common sitemap locations
+    - Supports sitemap index files
+    - Handles XML parsing errors gracefully
     """
     parsed = urlparse(url)
     root_domain = f"{parsed.scheme}://{parsed.netloc}"
-    
-    # List of possible sitemap locations to check
+
     sitemap_locations = [
-        urljoin(url, "sitemap.xml"),  # Current path
-        urljoin(root_domain, "sitemap.xml"),  # Root domain
-        urljoin(root_domain, "sitemap_index.xml"),  # Common alternate name
+        urljoin(url, "sitemap.xml"),
+        urljoin(root_domain, "sitemap.xml"),
+        urljoin(root_domain, "sitemap_index.xml"),
     ]
-    
+
     for sitemap_url in sitemap_locations:
         try:
             content = await fetch_page(sitemap_url, user_agent)
             if not content:
                 continue
-                
-            # Try to parse as XML
+
             try:
                 root = ET.fromstring(content)
                 urls = set()
-                
-                # Check if this is a sitemap index
+
                 if "sitemapindex" in root.tag:
                     for sitemap in root.findall(".//{*}loc"):
                         sub_content = await fetch_page(sitemap.text, user_agent)
                         if sub_content:
                             try:
                                 sub_root = ET.fromstring(sub_content)
-                                urls.update(loc.text for loc in sub_root.findall(".//{*}loc"))
+                                urls.update(
+                                    loc.text for loc in sub_root.findall(".//{*}loc")
+                                )
                             except ET.ParseError:
                                 continue
                 else:
-                    # Direct urlset sitemap
                     urls.update(loc.text for loc in root.findall(".//{*}loc"))
-                
+
                 if urls:
                     logger.info(f"Found {len(urls)} URLs in sitemap at {sitemap_url}")
                     return list(urls)
-                    
+
             except ET.ParseError:
                 continue
-                
+
         except Exception as e:
             logger.debug(f"Error checking sitemap at {sitemap_url}: {str(e)}")
             continue
-    
+
     return None
 
 
-async def check_robots_txt(url: str, user_agent: str) -> Optional[robotparser.RobotFileParser]:
+async def check_robots_txt(
+    url: str, user_agent: str
+) -> Optional[robotparser.RobotFileParser]:
     """
-    Fetch and parse robots.txt for a given URL.
-    Returns parser object if robots.txt exists, None otherwise.
+    Fetch and parse robots.txt file.
+
+    Args:
+        url: Base URL
+        user_agent: User agent string
+
+    Returns:
+        Configured RobotFileParser or None if not found
     """
     parsed = urlparse(url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    
+
     try:
         content = await fetch_page(robots_url, user_agent)
         if content:
@@ -405,15 +569,90 @@ async def check_robots_txt(url: str, user_agent: str) -> Optional[robotparser.Ro
             return parser
     except Exception as e:
         logger.debug(f"Error fetching robots.txt at {robots_url}: {str(e)}")
-    
+
     return None
 
 
-def can_fetch(robots_parser: Optional[robotparser.RobotFileParser], url: str, user_agent: str) -> bool:
-    """Check if URL can be fetched according to robots.txt rules"""
+def can_fetch(
+    robots_parser: Optional[robotparser.RobotFileParser], url: str, user_agent: str
+) -> bool:
+    """
+    Check if URL is allowed by robots.txt.
+
+    Args:
+        robots_parser: Configured parser or None
+        url: URL to check
+        user_agent: User agent string
+
+    Returns:
+        True if fetch is allowed or no parser exists
+    """
     if robots_parser is None:
         return True
     return robots_parser.can_fetch(user_agent, url)
+
+
+def is_blog_post(url: str, html: Optional[str] = None) -> bool:
+    """
+    Detect if a URL points to a blog post using various heuristics.
+
+    Args:
+        url: URL to check
+        html: Optional HTML content for additional checks
+
+    Returns:
+        True if URL likely points to a blog post
+    """
+    url_lower = url.lower()
+    path = urlparse(url).path.lower()
+
+    # Check URL patterns indicating blog content
+    blog_indicators = [
+        "/blog/",
+        "/posts/",
+        "/news/",
+        "/article/",
+        "/updates/",
+        "/weblog/",
+    ]
+    if any(indicator in url_lower for indicator in blog_indicators):
+        return True
+
+    # Check for date patterns in URL (e.g. /2024/01/21/, /2024-01-21)
+    date_patterns = [
+        r"/\d{4}/\d{2}/\d{2}/",  # /YYYY/MM/DD/
+        r"/\d{4}-\d{2}-\d{2}",  # /YYYY-MM-DD
+        r"/\d{4}/[a-z]+/\d{1,2}/",  # /YYYY/month/DD/
+        r"/\d{4}/\d{1,2}/\d{1,2}",  # /YYYY/M/D
+        r"/\d{4}/[a-z]{3}/\d{2}/",  # /YYYY/feb/DD/
+    ]
+    if any(re.search(pattern, url) for pattern in date_patterns):
+        return True
+
+    # If HTML content is available, check metadata
+    if html:
+        try:
+            metadata = extract_metadata(html)
+            if metadata:
+                # Check if article type indicates blog
+                article_type = metadata.get("type", "").lower()
+                if article_type in ["blog", "article", "post"]:
+                    return True
+
+                # Check publication date - if recent, likely a blog post
+                pub_date = metadata.get("date")
+                if pub_date:
+                    try:
+                        date = datetime.fromisoformat(pub_date)
+                        # Consider it a blog if published in last 2 years
+                        if (datetime.now() - date).days < 730:
+                            return True
+                    except ValueError:
+                        pass
+        except Exception as e:
+            logger.debug(f"Error checking metadata for blog detection: {e}")
+
+    return False
 
 
 async def scrape_recursive(
@@ -424,14 +663,27 @@ async def scrape_recursive(
     force_rescrape: bool = False,
 ) -> str:
     """
-    Recursively scrape all links from start_url domain.
+    Recursively scrape website with constraints.
 
     Args:
-        start_url: URL to start scraping from
-        user_agent: User agent string to use for requests
-        rate_limit: Maximum number of concurrent requests
-        dump_text: Whether to save raw text files
-        force_rescrape: If True, rescrape pages even if they exist in the database
+        start_url: Starting URL
+        user_agent: User agent string
+        rate_limit: Max concurrent requests
+        dump_text: Save raw text files
+        force_rescrape: Ignore existing content
+
+    Returns:
+        Status message
+
+    Features:
+    - GitHub repository support
+    - Robots.txt compliance
+    - Sitemap.xml support
+    - Rate limiting
+    - Progress tracking
+    - Content deduplication
+    - Proxy failover
+    - Blog post filtering
     """
     if not start_url.startswith(("http://", "https://")):
         return "Error: Invalid URL. Must start with http:// or https://"
@@ -483,9 +735,12 @@ async def scrape_recursive(
     # Check for sitemap
     sitemap_urls = await check_sitemap(start_url, user_agent)
     if sitemap_urls:
-        logger.info("Found sitemap, using URLs from it")
+        logger.info(f"Found {len(sitemap_urls)} URLs in sitemap")
+        # Filter out blog posts from sitemap
+        sitemap_urls = [url for url in sitemap_urls if not is_blog_post(url)]
+        logger.info(f"Filtered to {len(sitemap_urls)} non-blog URLs")
         for url in sitemap_urls:
-            if url not in visited and can_fetch(robots_parser, url, user_agent):
+            if url not in visited and should_follow_link(url, start_url, start_path):
                 await to_visit.put(url)
     else:
         logger.info("No sitemap found, using recursive crawling")
@@ -536,7 +791,9 @@ async def scrape_recursive(
                                         continue
 
                                     # Always store in database
-                                    db_handler.add_document(text, url)
+                                    db_handler.add_document(
+                                        text, url, force_rescrape=force_rescrape
+                                    )
 
                                     # Optionally save raw text files
                                     if dump_text:
@@ -548,7 +805,9 @@ async def scrape_recursive(
                                     # Extract and queue new links
                                     links = extract_links(html, url, domain, start_path)
                                     for link in links:
-                                        if link not in visited and can_fetch(robots_parser, link, user_agent):
+                                        if link not in visited and can_fetch(
+                                            robots_parser, link, user_agent
+                                        ):
                                             await to_visit.put(link)
 
                         progress_bar.update(1)
