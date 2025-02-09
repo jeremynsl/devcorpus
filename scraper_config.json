@@ -11,27 +11,22 @@
                 "sentence-transformers/all-MiniLM-L6-v2",
                 "BAAI/bge-base-en-v1.5"
             ],
-            "default": "avsolatorio/GIST-Embedding-v0",
+            "default": "sentence-transformers/all-MiniLM-L6-v2",
             "reranker": "cross-encoder/ms-marco-MiniLM-L-6-v2"
         },
         "retrieval": {
             "initial_percent": 0.2,
             "min_initial": 50,
-            "max_initial": 500
+            "max_initial": 500,
+            "similarity_threshold": 0.5
         }
     },
     "chunking": {
-        "chunk_size": 200,
-        "max_chunk_size": 200,
+        "chunk_size": 400,
+        "max_chunk_size": 400,
         "chunk_overlap": 0
     },
     "chat": {
-        "message_history_size": 10,
-        "max_retries": 3,
-        "retry_base_delay": 1.0,
-        "retry_max_delay": 30.0,
-        "system_prompt": "You are a helpful AI assistant that helps users find and understand information from web pages.",
-        "rag_prompt": "Use ONLY the following documentation excerpts to answer the question. If you cannot answer based on these excerpts, say so.\n\nDOCUMENTATION EXCERPTS:\n{context}\n\nUSER QUESTION: {query}\n\nPlease provide a clear and concise answer, citing specific sources with [number] format. If multiple sources support a point, cite all of them.\nIf you cannot answer the question based on the provided context, say so clearly.",
         "models": {
             "available": [
                 "openrouter/deepseek/deepseek-r1:free",
@@ -51,7 +46,15 @@
                 "openrouter/google/gemini-2.0-flash-thinking-exp:free",
                 "claude-3"
             ],
-            "default": "gemini/gemini-1.5-flash"
-        }
+            "default": "gpt-3.5-turbo"
+        },
+        "message_history_size": 10,
+        "max_retries": 3,
+        "retry_base_delay": 1.0,
+        "retry_max_delay": 30.0,
+        "system_prompt": "You are a helpful AI assistant that helps users find and understand information from web pages.",
+        "rag_prompt": "Use ONLY the following documentation excerpts to answer the question. If you cannot answer based on these excerpts, say so.\n\nDOCUMENTATION EXCERPTS:\n{context}\n\nUSER QUESTION: {query}\n\nPlease provide a clear and concise answer, citing specific sources with [number] format. If multiple sources support a point, cite all of them.\nIf you cannot answer the question based on the provided context, say so clearly.",
+        "rag_prompt_high_quality": "The following excerpts are highly relevant to the user's query. Use them confidently to provide a detailed response.\n\nDOCUMENTATION EXCERPTS:\n{context}\n\nUSER QUESTION: {query}\n\nProvide a clear and detailed answer, citing specific sources with [number] format. If multiple sources support a point, cite all of them. While these sources are highly relevant, still indicate if any part of your response requires information not found in the excerpts.",
+        "rag_prompt_low_quality": "The following excerpts have lower relevance to the query. Carefully incorporate any useful information while relying more on your general knowledge.\n\nDOCUMENTATION EXCERPTS:\n{context}\n\nUSER QUESTION: {query}\n\nProvide a response that balances the available documentation with general knowledge. When using information from the excerpts, cite specific sources with [number] format. Clearly distinguish between information from the sources and your general knowledge."
     }
 }
