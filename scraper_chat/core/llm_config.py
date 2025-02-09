@@ -1,3 +1,12 @@
+"""
+LLM configuration and rate limiting module.
+Provides a wrapper around LiteLLM for making API calls with:
+- Configurable rate limiting using a rolling window
+- Automatic retries with exponential backoff
+- Streaming support
+- Error handling and logging
+"""
+
 from typing import Union
 import litellm
 from litellm import (
@@ -26,9 +35,20 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """Rate limiter for API calls using a rolling window with epsilon handling"""
+    """
+    Rate limiter for API calls using a rolling window.
+
+    Implements a token bucket algorithm with epsilon handling for floating-point precision.
+    Tracks request times in a rolling window and enforces RPM (requests per minute) limits.
+    """
 
     def __init__(self, rpm: int):
+        """
+        Initialize rate limiter.
+
+        Args:
+            rpm: Maximum requests per minute. Set to 0 to disable rate limiting.
+        """
         self.rpm = rpm
         self.window_size = 60  # Seconds
         self.request_times = deque()
@@ -38,7 +58,16 @@ class RateLimiter:
         self.start_time = time.time()
         self.empty_since = None
 
-    def get_status(self):
+    def get_status(self) -> dict:
+        """
+        Get current rate limiter status.
+
+        Returns:
+            Dict containing:
+            - rpm: Current requests per minute limit
+            - window_remaining: Seconds until oldest request expires
+            - active_requests: Number of requests in current window
+        """
         now = time.time()
         return {
             "rpm": self.rpm,
@@ -48,8 +77,13 @@ class RateLimiter:
             "active_requests": len(self.request_times),
         }
 
-    def _clean_old_requests(self, now: float):
-        """Clean old requests and track emptiness"""
+    def _clean_old_requests(self, now: float) -> None:
+        """
+        Remove expired requests from the window and update empty state tracking.
+
+        Args:
+            now: Current timestamp for comparison
+        """
         initial_count = len(self.request_times)
 
         while self.request_times:
@@ -58,12 +92,16 @@ class RateLimiter:
                 self.request_times.popleft()
             else:
                 break
-        # Track when buffer becomes empty
+
         if initial_count > 0 and len(self.request_times) == 0:
             self.empty_since = now
-            print("\n BUFFER EMPTIED - All requests expired\n")
+            logger.debug("Rate limit buffer emptied - all requests expired")
 
-    async def wait(self):
+    async def wait(self) -> None:
+        """
+        Wait if necessary to comply with rate limits.
+        Thread-safe implementation using asyncio lock.
+        """
         if not self.enabled:
             return
 
@@ -92,40 +130,57 @@ class RateLimiter:
             if len(self.request_times) >= self.rpm:
                 oldest_age = now - self.request_times[0]
                 wait_time = self.window_size - oldest_age + self.epsilon
-                print(f"   RATE LIMIT → Waiting {wait_time:.1f}s")
+                logger.debug(f"Rate limit reached, waiting {wait_time:.1f}s")
                 await asyncio.sleep(wait_time)
                 now = time.time()
-                self._clean_old_requests(now)  # Will print if emptied
+                self._clean_old_requests(now)
 
             self.request_times.append(now)
 
 
 class LLMConfig:
-    """Simple wrapper for LiteLLM completions"""
+    """
+    Configuration wrapper for LiteLLM API calls.
+    Provides retry logic, rate limiting, and response streaming.
+    """
 
     _rate_limiter = None
     _config = None
 
     def __init__(self, model: str):
-        """Initialize with model name"""
+        """
+        Initialize LLM configuration.
+
+        Args:
+            model: Name of the LLM model to use
+        """
         self.model = model
         self.config = load_config(CONFIG_FILE)
         self.system_prompt = self.config["chat"]["system_prompt"]
-        # Retry configuration
         self.max_retries = self.config.get("chat", {}).get("max_retries", 3)
         self.base_delay = self.config.get("chat", {}).get("retry_base_delay", 1)
         self.max_delay = self.config.get("chat", {}).get("retry_max_delay", 30)
 
     @classmethod
-    def _load_config(cls):
-        """Load config file if not already loaded"""
+    def _load_config(cls) -> dict:
+        """
+        Load configuration file if not already loaded.
+
+        Returns:
+            Dictionary containing configuration settings
+        """
         if cls._config is None:
             cls._config = load_config(CONFIG_FILE)
         return cls._config
 
     @classmethod
-    def get_rate_limiter(cls):
-        """Get rate limiter with config-based RPM"""
+    def get_rate_limiter(cls) -> RateLimiter:
+        """
+        Get or create rate limiter instance.
+
+        Returns:
+            RateLimiter configured with RPM from config file
+        """
         if cls._rate_limiter is None:
             config = cls._load_config()
             rpm = config.get("rate_limit", 0)
@@ -133,12 +188,23 @@ class LLMConfig:
         return cls._rate_limiter
 
     @classmethod
-    def configure_rate_limit(cls, rpm: int):
-        """Configure rate limiting, mainly for testing"""
+    def configure_rate_limit(cls, rpm: int) -> None:
+        """
+        Configure rate limiting with specified RPM.
+        Primarily used for testing.
+
+        Args:
+            rpm: Requests per minute limit
+        """
         cls._rate_limiter = RateLimiter(rpm)
 
-    def before_sleep_log_message(self, retry_state: RetryCallState):
-        """Log retry attempts with appropriate message"""
+    def before_sleep_log_message(self, retry_state: RetryCallState) -> None:
+        """
+        Log message before retry attempt.
+
+        Args:
+            retry_state: Current retry state from tenacity
+        """
         if retry_state.outcome.failed:
             exception = retry_state.outcome.exception()
             logger.warning(
@@ -149,7 +215,19 @@ class LLMConfig:
     async def _make_request(
         self, messages: list, stream: bool
     ) -> Union[str, AsyncGenerator[str, None]]:
-        """Make LLM request with retries using Tenacity"""
+        """
+        Make LLM API request with retries.
+
+        Args:
+            messages: List of message dictionaries
+            stream: Whether to stream the response
+
+        Returns:
+            Either a complete response string or an async generator for streaming
+
+        Raises:
+            RetryError: If all retry attempts fail
+        """
 
         @retry(
             stop=stop_after_attempt(self.max_retries),
@@ -180,7 +258,20 @@ class LLMConfig:
     async def get_response(
         self, prompt: str, stream: bool = False
     ) -> Union[str, AsyncGenerator[str, None]]:
-        """Get async response from LLM with retries"""
+        """
+        Get response from LLM with retries and rate limiting.
+
+        Args:
+            prompt: User's input prompt
+            stream: Whether to stream the response
+
+        Returns:
+            Either a complete response string or an async generator for streaming
+
+        Raises:
+            TypeError: If prompt is not a string
+            RetryError: If all retry attempts fail
+        """
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
 
@@ -204,9 +295,19 @@ class LLMConfig:
         return response.choices[0].message.content
 
     def get_model(self) -> str:
-        """Get current model name"""
+        """
+        Get current model name.
+
+        Returns:
+            Name of the LLM model in use
+        """
         return self.model
 
     def set_model(self, model: str):
-        """Set new model"""
+        """
+        Set new model.
+
+        Args:
+            model: Name of the LLM model to use
+        """
         self.model = model

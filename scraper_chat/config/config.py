@@ -1,3 +1,5 @@
+"""Config module for DevCorpus."""
+
 import os
 import sys
 import json
@@ -5,15 +7,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-###############################################################################
-# Global Config / Constants
-###############################################################################
 CONFIG_FILE = "scraper_config.json"
 
 
-###############################################################################
-# Load Config
-###############################################################################
 def load_config(config_path: str) -> dict:  # Return full config as dictionary
     """Load and return the entire config as a dictionary"""
     if not os.path.exists(config_path):

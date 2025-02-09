@@ -1,3 +1,5 @@
+"""Logging configuration module."""
+
 import logging
 import sys
 

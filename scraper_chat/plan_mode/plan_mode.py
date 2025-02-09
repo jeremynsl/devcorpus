@@ -1,3 +1,12 @@
+"""
+Two-phase planning and execution engine for complex tasks.
+Features:
+- Planning Phase: Generate high-level task breakdown using LLM
+- Execution Phase: Iterative RAG-assisted solution generation
+- Streaming output with progress tracking
+- Error handling and fallback mechanisms
+"""
+
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, AsyncGenerator
 from scraper_chat.database.chroma_handler import ChromaHandler
@@ -7,12 +16,11 @@ from scraper_chat.core.llm_config import LLMConfig
 @dataclass
 class PlanOutput:
     """
-    A standardized output message for plan and execution steps.
+    Structured output for plan and execution phases.
 
     Attributes:
-        message: The content of the message.
-        metadata: Optional dictionary containing extra context,
-                  such as the phase of the process or the step number.
+        message: Content chunk for streaming output
+        metadata: Context dict containing phase info and step numbers
     """
 
     message: str
@@ -21,20 +29,39 @@ class PlanOutput:
 
 class PlanModeExecutor:
     """
-    Handles the two-phase Plan Mode:
-    1) Planning Phase: LLM creates a high-level plan (without docs).
-    2) Execution Phase: For each step, retrieve docs and generate the solution iteratively.
+    Two-phase task execution engine using LLM and RAG.
+
+    Features:
+    1. Planning: Break down tasks into logical steps
+    2. Execution: Generate solutions using relevant documentation
+    3. Progress tracking with metadata
+    4. Error handling with fallbacks
     """
 
     def __init__(self, collections, model):
+        """
+        Initialize executor with document collections and LLM model.
+
+        Args:
+            collections: List of ChromaDB collection names
+            model: Name of LLM model to use
+        """
         self.db = ChromaHandler()
         self.collections = collections
         self.llm = LLMConfig(model)
 
     async def generate_plan(self, user_message: str) -> AsyncGenerator[str, None]:
         """
-        Ask the LLM for a high-level plan, using RAG context from relevant docs.
-        Yields raw plan text chunks that form a JSON array.
+        Generate high-level execution plan using RAG context.
+
+        Args:
+            user_message: User's task description
+
+        Yields:
+            JSON text chunks containing numbered plan steps
+
+        Note:
+            Output is streamed as valid JSON array of step objects
         """
         query_prompt = f"""Generate 1 concise search query to find relevant documentation for this request:
 
@@ -77,11 +104,23 @@ DO NOT include any extra fields or text outside the JSON.
         response_stream = await self.llm.get_response(plan_prompt, stream=True)
         async for chunk in response_stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content  # Stream individual tokens
+                yield chunk.choices[0].delta.content
 
     def parse_plan(self, plan_text: str) -> List[str]:
         """
-        Parse the JSON plan text into a list of step descriptions.
+        Parse JSON plan into step descriptions with validation.
+
+        Args:
+            plan_text: JSON string containing plan steps
+
+        Returns:
+            List of step description strings
+
+        Raises:
+            ValueError: If plan format is invalid or no valid steps found
+
+        Note:
+            Includes fallback to text parsing if JSON fails
         """
         import json
 
@@ -136,7 +175,13 @@ DO NOT include any extra fields or text outside the JSON.
 
     async def generate_docs_query(self, step: str) -> AsyncGenerator[str, None]:
         """
-        For each step, produce a short doc-search query.
+        Generate optimized search query for step implementation.
+
+        Args:
+            step: Description of current plan step
+
+        Yields:
+            Query text chunks optimized for documentation search
         """
         prompt = f"""Generate 1 concise search query for implementing this Svelte/SvelteKit step:
 
@@ -158,7 +203,15 @@ Your queries:
 
     def retrieve_docs(self, query_text: str, n_results: int = 5) -> List[dict]:
         """
-        Retrieve documents using the Chroma-based RAG mechanism.
+        Retrieve and rank relevant documents across collections.
+
+        Args:
+            query_text: Search query
+            n_results: Maximum number of results to return
+
+        Returns:
+            List of document dicts sorted by relevance
+            Each dict contains text, metadata, and distance score
         """
         all_results = []
         for coll in self.collections:
@@ -180,7 +233,15 @@ Your queries:
         self, step: str, docs: List[dict], history: List[dict]
     ) -> AsyncGenerator[str, None]:
         """
-        Given a plan step and relevant docs, generate the solution output.
+        Generate solution for a plan step using RAG context.
+
+        Args:
+            step: Current step description
+            docs: List of relevant documents
+            history: Previous steps and their solutions
+
+        Yields:
+            Solution text chunks incorporating doc context
         """
         previous_steps = "\n".join(
             f"Step {s['step_number']}: {s['description']}\n"
@@ -224,8 +285,17 @@ Using the above info, produce code or text that addresses this step:
         self, user_message: str, previous_steps: Optional[List[dict]] = None
     ) -> AsyncGenerator[PlanOutput, None]:
         """
-        Orchestrate Plan Mode with proper history tracking.
-        Yields PlanOutput objects for each piece of output.
+        Orchestrate complete planning and execution workflow.
+
+        Args:
+            user_message: User's task description
+            previous_steps: Optional list of previous step results
+
+        Yields:
+            PlanOutput objects containing:
+            - Streamed output chunks
+            - Phase metadata
+            - Step tracking info
         """
         step_history = previous_steps if previous_steps else []
 
@@ -249,7 +319,6 @@ Using the above info, produce code or text that addresses this step:
                 "solution": None,
             }
             step_history.append(current_step)
-            # Yield step header
             yield PlanOutput(
                 message=f"\n\n---\n**Step {step_number}**: {step}\n",
                 metadata={"phase": "step_header", "step": step_number},
@@ -291,23 +360,26 @@ Using the above info, produce code or text that addresses this step:
             metadata={"phase": "completion"},
         )
 
-    # Internal logging helpers for consistency
     def _logger_info(self, msg: str):
+        """Log info message with module logger."""
         import logging
 
         logging.getLogger(__name__).info(msg)
 
     def _logger_error(self, msg: str):
+        """Log error message with module logger."""
         import logging
 
         logging.getLogger(__name__).error(msg)
 
     def _logger_warning(self, msg: str):
+        """Log warning message with module logger."""
         import logging
 
         logging.getLogger(__name__).warning(msg)
 
     def _logger_debug(self, msg: str):
+        """Log debug message with module logger."""
         import logging
 
         logging.getLogger(__name__).debug(msg)
