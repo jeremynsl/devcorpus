@@ -6,7 +6,7 @@ from hashlib import blake2b
 from chromadb.config import Settings
 
 # Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from scraper_chat.database.chroma_handler import ChromaHandler
 
@@ -181,12 +181,33 @@ def test_add_document_regular_vs_github(chroma_handler, mock_collection):
 
 def test_query(chroma_handler, mock_collection):
     """Test querying documents"""
-    with patch.object(chroma_handler, "get_collection", return_value=mock_collection):
-        results = chroma_handler.query("test_collection", "test query")
+    # Configure mock to return results
+    mock_collection.query.return_value = {
+        "documents": [["test document"]],  # Nested list
+        "metadatas": [[{"url": "test_url"}]],  # Nested list
+        "distances": [[0.5]],  # Nested list
+        "ids": [["1"]],  # Nested list
+    }
+    mock_collection.count.return_value = 1  # Add mock for count
+
+    # Mock the reranker
+    mock_reranker = MagicMock()
+    mock_reranker.rerank.return_value = (
+        [0],
+        [0.9],
+    )  # Return high score for test document
+
+    with (
+        patch.object(chroma_handler, "get_collection", return_value=mock_collection),
+        patch(
+            "scraper_chat.database.chroma_handler.Reranker", return_value=mock_reranker
+        ),
+    ):
+        results, avg_score = chroma_handler.query("test_collection", "test query")
         assert len(results) == 1
-        assert results[0]["text"] == "Test document"
-        assert results[0]["url"] == "http://test.com"
-        assert results[0]["distance"] == 0.5
+        assert results[0]["text"] == "test document"
+        assert results[0]["url"] == "test_url"
+        assert avg_score > 0
 
 
 def test_delete_collection():

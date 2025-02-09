@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.robotparser import RobotFileParser
 
 # Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from scraper_chat.scraper.scraper import (
     scrape_recursive,
@@ -80,8 +80,10 @@ def test_get_output_filename():
     """Test URL to filename conversion"""
     import os
 
-    # Get the expected base directory
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Get the expected base directory - go up two levels from test file
+    base_dir = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
     scrapedtxt_dir = os.path.join(base_dir, "scrapedtxt")
 
     test_cases = [
@@ -99,8 +101,10 @@ def test_get_output_filename_edge_cases():
     """Test get_output_filename with edge case URLs"""
     import os
 
-    # Get the expected base directory
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Get the expected base directory - go up two levels from test file
+    base_dir = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
     scrapedtxt_dir = os.path.join(base_dir, "scrapedtxt")
 
     test_cases = [
@@ -654,6 +658,7 @@ def test_scrape_recursive_import():
 @pytest.mark.asyncio
 async def test_check_sitemap():
     """Test sitemap checking functionality"""
+
     # Mock the fetch_page function to return a test sitemap
     async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
         if "sitemap.xml" in url:
@@ -679,6 +684,7 @@ async def test_check_sitemap():
 @pytest.mark.asyncio
 async def test_check_sitemap_index():
     """Test sitemap index handling"""
+
     # Mock to test sitemap index functionality
     async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
         if url == "https://test.com/sitemap.xml":
@@ -707,6 +713,7 @@ async def test_check_sitemap_index():
 @pytest.mark.asyncio
 async def test_check_robots_txt():
     """Test robots.txt parsing functionality"""
+
     # Mock the fetch_page function to return a test robots.txt
     async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
         if "robots.txt" in url:
@@ -718,11 +725,11 @@ Allow: /public/"""
     with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page):
         parser = await check_robots_txt("https://test.com", "test-agent")
         assert parser is not None
-        
+
         # Test allowed URLs
         assert can_fetch(parser, "https://test.com/public/page", "test-agent") is True
         assert can_fetch(parser, "https://test.com/", "test-agent") is True
-        
+
         # Test disallowed URLs
         assert can_fetch(parser, "https://test.com/private/page", "test-agent") is False
 
@@ -733,29 +740,32 @@ async def test_robots_txt_integration():
     robots_txt = """User-agent: *
 Disallow: /private/
 Allow: /public/"""
-    
+
     sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
                 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
                     <url><loc>https://test.com/public/page1</loc></url>
                     <url><loc>https://test.com/private/page2</loc></url>
                 </urlset>"""
-                
+
     async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
         if "robots.txt" in url:
             return robots_txt
         elif "sitemap.xml" in url:
             return sitemap_xml
         return "<html></html>"  # Return empty HTML for other URLs
-    
-    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page), \
-         patch("scraper_chat.scraper.scraper.ChromaHandler") as mock_chroma:
+
+    with (
+        patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page),
+        patch("scraper_chat.scraper.scraper.ChromaHandler") as mock_chroma,
+    ):
         # Run scraper
         from scraper_chat.scraper.scraper import scrape_recursive
+
         result = await scrape_recursive("https://test.com", "test-agent", 1)
-        
+
         # Verify it completed
         assert "completed" in result.lower()
-        
+
         # The private URL should not have been processed
         mock_instance = mock_chroma.return_value
         calls = [call[0][0] for call in mock_instance.add_document.call_args_list]
@@ -765,6 +775,7 @@ Allow: /public/"""
 @pytest.mark.asyncio
 async def test_check_robots_txt_standard_library():
     """Test robots.txt parsing functionality with standard library"""
+
     # Mock the fetch_page function to return a test robots.txt
     async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
         if "robots.txt" in url:
@@ -776,11 +787,11 @@ Allow: /public/"""
     with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page):
         parser = await check_robots_txt("https://test.com", "test-agent")
         assert isinstance(parser, RobotFileParser)
-        
+
         # Test allowed URLs
         assert parser.can_fetch("test-agent", "https://test.com/public/page") is True
         assert parser.can_fetch("test-agent", "https://test.com/") is True
-        
+
         # Test disallowed URLs
         assert parser.can_fetch("test-agent", "https://test.com/private/page") is False
 
@@ -791,30 +802,80 @@ async def test_robots_txt_integration_standard_library():
     robots_txt = """User-agent: *
 Disallow: /private/
 Allow: /public/"""
-    
+
     sitemap_xml = """<?xml version="1.0" encoding="UTF-8"?>
                 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
                     <url><loc>https://test.com/public/page1</loc></url>
                     <url><loc>https://test.com/private/page2</loc></url>
                 </urlset>"""
-                
+
     async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
         if "robots.txt" in url:
             return robots_txt
         elif "sitemap.xml" in url:
             return sitemap_xml
         return "<html></html>"  # Return empty HTML for other URLs
-    
-    with patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page), \
-         patch("scraper_chat.scraper.scraper.ChromaHandler") as mock_chroma:
+
+    with (
+        patch("scraper_chat.scraper.scraper.fetch_page", mock_fetch_page),
+        patch("scraper_chat.scraper.scraper.ChromaHandler") as mock_chroma,
+    ):
         # Run scraper
         from scraper_chat.scraper.scraper import scrape_recursive
+
         result = await scrape_recursive("https://test.com", "test-agent", 1)
-        
+
         # Verify it completed
         assert "completed" in result.lower()
-        
+
         # The private URL should not have been processed
         mock_instance = mock_chroma.return_value
         calls = [call[0][0] for call in mock_instance.add_document.call_args_list]
         assert not any("private" in url for url in calls)
+
+
+@pytest.mark.asyncio
+async def test_fallback_behavior():
+    """Test scraper falls back to original behavior when robots.txt and sitemap.xml are not found"""
+
+    # Mock fetch_page to return None for robots.txt and sitemap.xml, but valid HTML for the main URL
+    async def mock_fetch_page(url: str, user_agent: str) -> Optional[str]:
+        if "robots.txt" in url or "sitemap" in url:
+            return None
+        if url == "https://test.com":
+            return (
+                "<html><body><a href='https://test.com/page1'>Link 1</a></body></html>"
+            )
+        return "<html><body>Page content</body></html>"
+
+    with (
+        patch("scraper_chat.scraper.scraper.fetch_page", side_effect=mock_fetch_page),
+        patch("scraper_chat.scraper.scraper.ChromaHandler") as mock_chroma,
+        patch("scraper_chat.scraper.scraper.extract_links") as mock_extract_links,
+        patch("scraper_chat.scraper.scraper.html_to_markdown") as mock_html_to_markdown,
+    ):
+        # Setup mock for extract_links to return some test URLs
+        mock_extract_links.return_value = (
+            set()
+        )  # Return empty set to prevent infinite loop
+
+        # Setup mock for html_to_markdown to return valid text
+        mock_html_to_markdown.return_value = "Test content"
+
+        # Setup mock for ChromaHandler
+        mock_instance = mock_chroma.return_value
+        mock_instance.has_matching_content.return_value = False
+
+        # Run scraper with rate_limit=1 to simplify task management
+        from scraper_chat.scraper.scraper import scrape_recursive
+
+        result = await scrape_recursive("https://test.com", "test-agent", 1)
+
+        # Verify it completed successfully
+        assert "completed" in result.lower()
+
+        # Verify extract_links was called (indicating recursive crawling)
+        mock_extract_links.assert_called()
+
+        # Verify ChromaHandler was used to store documents
+        assert mock_instance.add_document.called

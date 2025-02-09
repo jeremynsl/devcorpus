@@ -73,13 +73,16 @@ class TestTextProcessor:
     def test_process_chunk_boilerplate(self, text_processor):
         """Test boilerplate detection"""
         boilerplate_chunk = "Copyright 2023. All rights reserved."
+        processed_blocks = []
 
         # Simulate multiple occurrences of the same chunk
         for _ in range(4):
-            text_processor.process_chunk(boilerplate_chunk)
+            block = text_processor.process_chunk(boilerplate_chunk, processed_blocks)
+            if block:
+                processed_blocks.append(block)
 
         # The chunk should be identified as boilerplate
-        block = text_processor.process_chunk(boilerplate_chunk)
+        block = text_processor.process_chunk(boilerplate_chunk, processed_blocks)
         assert block is None
 
     def test_process_text(self, text_processor):
@@ -147,8 +150,8 @@ class TestTextProcessor:
         """Test processing of empty or whitespace-only input"""
         assert text_processor.process_text("") == ""
         assert text_processor.process_text("   \n\t  ") == ""
-        assert text_processor.process_chunk("") is None
-        assert text_processor.process_chunk("   ") is None
+        assert text_processor.process_chunk("", []) is None
+        assert text_processor.process_chunk("   ", []) is None
 
     def test_text_block_creation(self):
         """Test TextBlock dataclass"""
@@ -160,3 +163,47 @@ class TestTextProcessor:
         assert block.hash == "test_hash"
         assert block.frequency == 2
         assert not block.is_boilerplate
+
+    def test_cross_document_deduplication(self, text_processor):
+        """Test that identical content from different URLs is only processed once"""
+        content = """
+        This is a detailed technical document about performance optimization.
+        It contains specific implementation details and code examples.
+        
+        Here are some best practices to follow when optimizing your app.
+        """
+
+        # First URL - should process normally
+        processed1 = text_processor.process_text(
+            content, url="https://docs.example.com/v1/performance"
+        )
+        assert processed1 != ""
+        assert "performance optimization" in processed1
+
+        # Same content, different URL version - should return empty
+        processed2 = text_processor.process_text(
+            content, url="https://docs.example.com/v2/performance"
+        )
+        assert processed2 == ""
+
+        # Different content, should process normally
+        different_content = """
+        This is a completely different document about security best practices.
+        It covers authentication and authorization in detail.
+        """
+        processed3 = text_processor.process_text(
+            different_content, url="https://docs.example.com/v1/security"
+        )
+        assert processed3 != ""
+        assert "security best practices" in processed3
+
+        # Same URL as first document but different content - should process
+        new_version = """
+        Updated document about performance optimization with new examples.
+        This content is different from the original version.
+        """
+        processed4 = text_processor.process_text(
+            new_version, url="https://docs.example.com/v1/performance"
+        )
+        assert processed4 != ""
+        assert "Updated document" in processed4

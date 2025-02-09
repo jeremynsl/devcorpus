@@ -6,7 +6,7 @@ from tenacity import RetryError
 import logging
 
 # Add parent directory to path to import from scraper_chat
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from scraper_chat.core.llm_config import LLMConfig
 from litellm import (

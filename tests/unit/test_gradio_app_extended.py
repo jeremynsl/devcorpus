@@ -5,7 +5,7 @@ from pathlib import Path
 import gradio as gr
 
 # Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from scraper_chat.ui.gradio_app import GradioChat, colorize_log
 

@@ -102,9 +102,10 @@ def test_reranker_with_mocked_cross_encoder(mock_config_file):
         )
 
         # Verify returned indices are correct
-        assert len(ranked_indices) == 2
-        assert ranked_indices[0] == 0  # First document should be top-ranked
-        assert ranked_indices[1] == 1  # Second document should be second
+        assert len(ranked_indices) == 2  # Should be a tuple of (indices, scores)
+        indices, scores = ranked_indices
+        assert indices == [0, 1]  # First and second documents should be top-ranked
+        assert scores == [0.9, 0.7]  # Their corresponding scores
 
 
 def test_embedding_manager_singleton():
@@ -233,12 +234,18 @@ def test_reranker_with_empty_documents():
 
     # Test with empty document list
     ranked_indices = reranker.rerank("test query", [], top_k=5)
-    assert ranked_indices == []
+    assert ranked_indices == (
+        [],
+        [],
+    )  # Should return empty lists for both indices and scores
 
     # Test with None model
     reranker._rerank_model = None
     ranked_indices = reranker.rerank("test query", ["doc1", "doc2"], top_k=1)
-    assert ranked_indices == [0]
+    assert ranked_indices == (
+        [0],
+        [None],
+    )  # Should return original order with None scores
 
     # Restore the original model
     reranker._rerank_model = original_model
@@ -267,4 +274,7 @@ def test_reranker_with_no_model(mock_config_file):
 
     # Verify fallback behavior
     ranked_indices = reranker.rerank("test query", ["doc1", "doc2", "doc3"], top_k=2)
-    assert ranked_indices == [0, 1]  # Should return original order
+    assert ranked_indices == (
+        [0, 1],
+        [None, None],
+    )  # Should return original order with None scores

@@ -4,13 +4,13 @@ import sys
 from pathlib import Path
 
 # Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent))
-
+sys.path.append(str(Path(__file__).parent.parent.parent))
 from scraper_chat.chat.chat_interface import (
     ChatInterface,
     format_context,
     get_chat_prompt,
 )
+from scraper_chat.database.chroma_handler import ChromaHandler
 
 
 @pytest.fixture
@@ -27,9 +27,10 @@ def mock_config():
 @pytest.fixture
 def mock_chroma():
     handler = MagicMock()
-    handler.query.return_value = [
-        {"text": "Test document", "url": "http://test.com", "distance": 0.5}
-    ]
+    handler.query.return_value = (
+        [{"text": "Test document", "url": "http://test.com", "distance": 0.5}],
+        15.0,
+    )
     return handler
 
 
@@ -71,9 +72,35 @@ def test_format_context():
 
 def test_get_chat_prompt():
     """Test prompt formatting"""
-    prompt = get_chat_prompt("test query", "test context")
-    assert "test query" in prompt
+    prompt = get_chat_prompt("test query", "test context", avg_score=15.0)
+    assert "{context}" not in prompt
+    assert "{query}" not in prompt
     assert "test context" in prompt
+    assert "test query" in prompt
+
+
+def test_get_chat_prompt_config_loading():
+    """Test loading RAG prompt from config"""
+    with (
+        patch("builtins.open", create=True) as mock_open,
+        patch("json.load") as mock_load,
+    ):
+        # Mock config with specific RAG prompt
+        mock_load.return_value = {
+            "chat": {
+                "rag_prompt": "Context: {context}\nQuery: {query}\nResponse:",
+                "rag_prompt_high_quality": "High quality prompt",
+                "rag_prompt_low_quality": "Low quality prompt",
+            }
+        }
+
+        # Test high quality prompt
+        prompt = get_chat_prompt("test query", "test context", avg_score=15.0)
+        assert "High quality prompt" in prompt
+
+        # Test low quality prompt
+        prompt = get_chat_prompt("test query", "test context", avg_score=5.0)
+        assert "Low quality prompt" in prompt
 
 
 @pytest.mark.asyncio
@@ -89,7 +116,7 @@ async def test_get_response_no_collections(chat_interface):
 @pytest.mark.asyncio
 async def test_get_response_no_results(chat_interface, mock_chroma):
     """Test response when no results found"""
-    mock_chroma.query.return_value = []
+    mock_chroma.query.return_value = ([], 15.0)
     async for response, excerpts in chat_interface.get_response("test"):
         assert "No relevant information" in response
         assert excerpts == []
@@ -99,13 +126,19 @@ async def test_get_response_no_results(chat_interface, mock_chroma):
 @pytest.mark.asyncio
 async def test_get_response_with_excerpts(chat_interface):
     """Test response with excerpts"""
-    async for response, excerpts in chat_interface.get_response(
-        "test",
-    ):
-        assert isinstance(response, str)
-        assert isinstance(excerpts, list)
-        assert len(excerpts) > 0
-        break
+    # Mock the query method to return some results
+    with patch.object(ChromaHandler, "query") as mock_query:
+        mock_query.return_value = (
+            [{"text": "test excerpt", "url": "http://test.com"}],
+            15.0,
+        )
+
+        async for response, excerpts in chat_interface.get_response(
+            "test",
+        ):
+            assert isinstance(response, str)
+            assert isinstance(excerpts, list)
+            assert len(excerpts) > 0
 
 
 @pytest.mark.asyncio
@@ -123,11 +156,19 @@ async def test_message_history_limit(chat_interface):
 @pytest.mark.asyncio
 async def test_error_handling(chat_interface, mock_llm):
     """Test error handling in get_response"""
-    mock_llm.get_response.side_effect = Exception("Test error")
-    async for response, excerpts in chat_interface.get_response("test"):
-        assert "Error" in response
-        assert isinstance(excerpts, list)
-        break
+    # Mock query to return valid results
+    with patch.object(ChromaHandler, "query") as mock_query:
+        mock_query.return_value = (
+            [{"text": "test excerpt", "url": "http://test.com"}],
+            15.0,
+        )
+
+        # Make LLM raise an error
+        mock_llm.get_response.side_effect = Exception("Test error")
+        async for response, excerpts in chat_interface.get_response("test"):
+            assert "Error" in response
+            assert isinstance(excerpts, list)
+            break
 
 
 def test_format_context_long_text():
@@ -149,24 +190,6 @@ def test_format_context_long_text():
     # Verify metadata inclusion
     assert "Long text summary" in context
     assert "http://longtext.com" in context
-
-
-def test_get_chat_prompt_config_loading():
-    """Test loading RAG prompt from config"""
-    with (
-        patch("builtins.open", create=True) as mock_open,
-        patch("json.load") as mock_load,
-    ):
-        # Mock config with specific RAG prompt
-        mock_load.return_value = {
-            "chat": {"rag_prompt": "Context: {context}\nQuery: {query}\nResponse:"}
-        }
-
-        prompt = get_chat_prompt("test query", "test context")
-
-        # Verify prompt is formatted correctly
-        assert "Context: test context" in prompt
-        assert "Query: test query" in prompt
 
 
 def test_chat_interface_initialization():

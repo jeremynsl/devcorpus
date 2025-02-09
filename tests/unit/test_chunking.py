@@ -10,7 +10,7 @@ from scraper_chat.chunking.chunking import ChunkingManager
 from chunking_evaluation.chunking import RecursiveTokenChunker
 
 # Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 
 # Create a proper mock of ClusterSemanticChunker

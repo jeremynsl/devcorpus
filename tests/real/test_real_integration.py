@@ -18,7 +18,7 @@ from scraper_chat.chat.chat_interface import ChatInterface
 from scraper_chat.database.chroma_handler import ChromaHandler
 
 # Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -251,7 +251,9 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
                     logger.debug(f"Using collection: {collection_name}")
 
                     # Query for results
-                    results = db.query(collection_name, "Feature 1", n_results=1)
+                    results, avg_score = db.query(
+                        collection_name, "Feature 1", n_results=1
+                    )
                     logger.debug(f"Query results: {results}")
 
                     assert len(results) == 1
@@ -260,6 +262,7 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
                     # Check data integrity
                     assert "Feature 1" in result["text"]
                     assert page_url in result["url"]
+                    assert isinstance(avg_score, float)
 
                     # 3. Verify chat uses correct context with timeout
                     chat = ChatInterface([collection_name])
@@ -280,12 +283,13 @@ async def test_data_flow(test_server, test_db, test_config, reranker, mock_colle
                     assert page_url in excerpt["url"]
 
                     # Test querying with reranking
-                    reranked_results = reranker.rerank(
+                    reranked_indices, reranked_scores = reranker.rerank(
                         "What is Feature 1?",
                         [result["text"] for result in results],
                         top_k=1,
                     )
-                    assert len(reranked_results) == 1
+                    assert len(reranked_indices) == 1
+                    assert len(reranked_scores) == 1
 
         finally:
             # Clean up any pending tasks

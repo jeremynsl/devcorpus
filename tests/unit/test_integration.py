@@ -202,12 +202,43 @@ async def test_full_scrape_and_chat_workflow(
                 force_rescrape=False,
             )
 
-            # 2. Verify ChromaDB has content
-            collection_name = ChromaHandler.get_collection_name("http://test.com/page1")
-            db = ChromaHandler(collection_name)
-            results = db.query(collection_name, "documentation", n_results=5)
-            assert len(results) > 0
-            assert any("documentation" in result["text"].lower() for result in results)
+            # Configure mock collection for query
+            mock_collection.count.return_value = 1
+            mock_collection.query.return_value = {
+                "documents": [
+                    [
+                        "This is a test documentation page. It contains important documentation content here."
+                    ]
+                ],
+                "metadatas": [[{"url": "http://test.com/page1"}]],
+                "distances": [[0.5]],
+                "ids": [["1"]],
+            }
+
+            # Mock the reranker
+            mock_reranker = MagicMock()
+            mock_reranker.rerank.return_value = (
+                [0],
+                [0.9],
+            )  # Return high score for test document
+
+            with patch(
+                "scraper_chat.database.chroma_handler.Reranker",
+                return_value=mock_reranker,
+            ):
+                # 2. Verify ChromaDB has content
+                collection_name = ChromaHandler.get_collection_name(
+                    "http://test.com/page1"
+                )
+                db = ChromaHandler(collection_name)
+                results, avg_score = db.query(
+                    collection_name, "documentation", n_results=5
+                )
+                assert len(results) > 0
+                assert any(
+                    "documentation" in result["text"].lower() for result in results
+                )
+                assert avg_score > 0
 
             # 3. Test chat interaction
             chat = ChatInterface([collection_name])

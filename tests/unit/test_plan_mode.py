@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from scraper_chat.plan_mode.plan_mode import PlanModeExecutor
 
