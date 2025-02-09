@@ -13,12 +13,13 @@ import trafilatura
 from bs4 import BeautifulSoup
 import tempfile
 from chromadb.config import Settings
+
+# Add parent directory to path to import modules
+sys.path.append(str(Path(__file__).parent.parent.parent))
 from scraper_chat.embeddings.embeddings import Reranker
 from scraper_chat.chat.chat_interface import ChatInterface
 from scraper_chat.database.chroma_handler import ChromaHandler
 
-# Add parent directory to path to import modules
-sys.path.append(str(Path(__file__).parent.parent.parent))
 
 # Configure logging
 logger = logging.getLogger(__name__)

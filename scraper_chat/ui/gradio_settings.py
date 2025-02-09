@@ -1,3 +1,9 @@
+"""
+Settings management interface for the scraper chat application.
+Provides Gradio components for configuring application settings including
+proxies, rate limits, embedding models, chunking parameters, and chat settings.
+"""
+
 import gradio as gr
 import json
 import logging
@@ -6,11 +12,19 @@ from scraper_chat.config.config import load_config, save_config, CONFIG_FILE
 logger = logging.getLogger(__name__)
 
 
-def save_individual_settings(proxies_text, rate_limit_value):
+def save_individual_settings(proxies_text: str, rate_limit_value: int) -> str:
+    """
+    Save proxy and rate limit settings to config file.
+
+    Args:
+        proxies_text: Comma-separated list of proxy IPs
+        rate_limit_value: Number of requests per second
+
+    Returns:
+        str: Status message indicating success or failure
+    """
     try:
-        # Convert comma-separated string to list of IPs
         proxies = [p.strip() for p in proxies_text.split(",") if p.strip()]
-        # Load current config and update with new settings
         config = load_config(CONFIG_FILE)
         config["proxies"] = proxies
         config["rate_limit"] = int(rate_limit_value)
@@ -20,7 +34,16 @@ def save_individual_settings(proxies_text, rate_limit_value):
         return f"Error saving settings: {str(e)}"
 
 
-def save_settings(settings_text):
+def save_settings(settings_text: str) -> str:
+    """
+    Save raw JSON settings to config file.
+
+    Args:
+        settings_text: JSON string containing settings
+
+    Returns:
+        str: Status message indicating success or failure
+    """
     try:
         settings = json.loads(settings_text)
         save_config(settings, CONFIG_FILE)
@@ -30,38 +53,65 @@ def save_settings(settings_text):
 
 
 def save_all_settings(
-    proxies,
-    rate_limit,
-    user_agent,
-    embedding_models,
-    default_embedding,
-    reranker_model,
-    initial_percent,
-    min_initial,
-    max_initial,
-    chunk_size,
-    max_chunk_size,
-    chunk_overlap,
-    msg_history_size,
-    max_retries,
-    retry_base_delay,
-    retry_max_delay,
-    system_prompt,
-    rag_prompt,
-    chat_models,
-    default_chat_model,
-    pytorch_device,
-):
+    proxies: str,
+    rate_limit: int,
+    user_agent: str,
+    embedding_models: str,
+    default_embedding: str,
+    reranker_model: str,
+    initial_percent: float,
+    min_initial: int,
+    max_initial: int,
+    chunk_size: int,
+    max_chunk_size: int,
+    chunk_overlap: int,
+    msg_history_size: int,
+    max_retries: int,
+    retry_base_delay: float,
+    retry_max_delay: float,
+    system_prompt: str,
+    rag_prompt: str,
+    chat_models: str,
+    default_chat_model: str,
+    pytorch_device: str,
+) -> str:
+    """
+    Save all application settings to config file.
+
+    Args:
+        proxies: Comma-separated list of proxy IPs
+        rate_limit: Number of requests per second
+        user_agent: User agent string for requests
+        embedding_models: Comma-separated list of available embedding models
+        default_embedding: Default embedding model name
+        reranker_model: Model name for reranking results
+        initial_percent: Initial percentage of results to retrieve
+        min_initial: Minimum number of initial results
+        max_initial: Maximum number of initial results
+        chunk_size: Size of text chunks for processing
+        max_chunk_size: Maximum allowed chunk size
+        chunk_overlap: Number of overlapping tokens between chunks
+        msg_history_size: Number of messages to keep in chat history
+        max_retries: Maximum number of retry attempts
+        retry_base_delay: Base delay between retries in seconds
+        retry_max_delay: Maximum delay between retries in seconds
+        system_prompt: System prompt for chat model
+        rag_prompt: RAG prompt template
+        chat_models: Comma-separated list of available chat models
+        default_chat_model: Default chat model name
+        pytorch_device: PyTorch device (cuda/cpu)
+
+    Returns:
+        str: Status message indicating success or failure
+    """
     try:
         config = load_config(CONFIG_FILE)
 
-        # Basic settings
         config["proxies"] = [p.strip() for p in proxies.split(",") if p.strip()]
         config["rate_limit"] = int(rate_limit)
         config["user_agent"] = user_agent
         config["pytorch_device"] = pytorch_device
 
-        # Embeddings settings
         config["embeddings"]["models"]["available"] = [
             m.strip() for m in embedding_models.split(",")
         ]
@@ -71,12 +121,10 @@ def save_all_settings(
         config["embeddings"]["retrieval"]["min_initial"] = int(min_initial)
         config["embeddings"]["retrieval"]["max_initial"] = int(max_initial)
 
-        # Chunking settings
         config["chunking"]["chunk_size"] = int(chunk_size)
         config["chunking"]["max_chunk_size"] = int(max_chunk_size)
         config["chunking"]["chunk_overlap"] = int(chunk_overlap)
 
-        # Chat settings
         config["chat"]["message_history_size"] = int(msg_history_size)
         config["chat"]["max_retries"] = int(max_retries)
         config["chat"]["retry_base_delay"] = float(retry_base_delay)
@@ -88,7 +136,6 @@ def save_all_settings(
         ]
         config["chat"]["models"]["default"] = default_chat_model
 
-        # PyTorch device
         config["pytorch_device"] = pytorch_device
 
         save_config(config, CONFIG_FILE)
@@ -97,11 +144,22 @@ def save_all_settings(
         return f"Error saving settings: {str(e)}"
 
 
-def create_settings_tab():
+def create_settings_tab() -> tuple:
+    """
+    Create the settings tab interface with all configuration options.
+
+    Returns:
+        tuple: (save_button, status_output) Gradio components for saving settings
+    """
     current_config = load_config(CONFIG_FILE)
 
     def refresh_settings():
-        """Refresh all settings from config file"""
+        """
+        Refresh all settings from config file.
+
+        Returns:
+            list: Updated values for all settings components or None on error
+        """
         config = load_config(CONFIG_FILE)
         try:
             return [
@@ -145,7 +203,6 @@ def create_settings_tab():
                 "Settings refreshed",
             ]
         except (ValueError, TypeError) as e:
-            # Log the specific value that failed conversion
             logger.error("Conversion error in refresh_settings():")
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error message: {str(e)}")
@@ -324,7 +381,6 @@ def create_settings_tab():
     save_button = gr.Button("Save All Settings", variant="primary", scale=1)
     status_output = gr.Textbox(label="Status", interactive=False, container=True)
 
-    # List of all components that need to be updated on refresh
     all_components = [
         proxies_input,
         rate_limit_input,
@@ -350,7 +406,6 @@ def create_settings_tab():
         status_output,
     ]
 
-    # Connect the save button with automatic refresh
     save_button.click(
         fn=save_all_settings,
         inputs=[

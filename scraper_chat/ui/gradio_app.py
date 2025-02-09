@@ -1,3 +1,9 @@
+"""
+Gradio-based web interface for the scraper chat application.
+Provides a user interface for scraping websites, managing collections,
+and interacting with the scraped data through a chat interface.
+"""
+
 import warnings
 
 warnings.filterwarnings(
@@ -34,7 +40,15 @@ config = load_config(CONFIG_FILE)
 
 
 def colorize_log(record: str) -> str:
-    """Add color to log messages based on level"""
+    """
+    Add HTML color formatting to log messages based on their level.
+
+    Args:
+        record (str): The log message to colorize
+
+    Returns:
+        str: HTML-formatted string with appropriate color coding
+    """
     if "ERROR" in record or "Error" in record:
         return f'<span style="color: #ff4444">{record}</span>'
     elif "WARNING" in record:
@@ -47,22 +61,40 @@ def colorize_log(record: str) -> str:
 
 
 class GradioChat:
+    """
+    Main class handling the Gradio chat interface and associated functionality.
+    Manages scraping, chat interactions, and collection management.
+    """
+
     def __init__(self) -> None:
+        """Initialize GradioChat with empty state."""
         self.chat_interface = None
         self.history = []
         self.current_collections = []
-        self.current_excerpts = []  # to store retrieved references
+        self.current_excerpts = []
 
     def format_plan_mode_references(self) -> str:
-        """Return a fixed note indicating that references are disabled in Plan Mode."""
+        """
+        Return a fixed note for Plan Mode.
+
+        Returns:
+            str: Message indicating references are disabled in Plan Mode
+        """
         return "📝 **Note:** References are disabled in Plan Mode."
 
     def refresh_databases(self, current_selections: List[str]) -> None:
-        """Refresh the list of available databases while maintaining current selections"""
+        """
+        Refresh the list of available databases while maintaining current selections.
+
+        Args:
+            current_selections (List[str]): Currently selected collections
+
+        Returns:
+            tuple: Updated Gradio dropdown component and status message
+        """
         db = ChromaHandler()
         collections = db.get_available_collections()
 
-        # Check which collections have summaries
         collection_choices = []
         for collection in collections:
             results = db.get_all_documents(collection)
@@ -72,14 +104,12 @@ class GradioChat:
                 and any(metadata.get("summary") for metadata in results["metadatas"])
             )
 
-            # Format display name with dots instead of underscores
             display_name = collection.replace("_", ".")
             if has_summary:
                 collection_choices.append((f"📝 {display_name}", collection))
             else:
                 collection_choices.append((display_name, collection))
 
-        # Keep only current selections that still exist
         valid_selections = [s for s in current_selections if s in collections]
 
         return gr.Dropdown(
@@ -87,7 +117,12 @@ class GradioChat:
         ), "Collections refreshed"
 
     def get_formatted_collections(self) -> List[Tuple[str, str]]:
-        """Get collection list with summary indicators for initial dropdown"""
+        """
+        Get collection list with summary indicators for dropdown.
+
+        Returns:
+            List[Tuple[str, str]]: List of tuples containing display name and collection name
+        """
         db = ChromaHandler()
         collections = db.get_available_collections()
         collection_choices = []
@@ -100,7 +135,6 @@ class GradioChat:
                 and any(metadata.get("summary") for metadata in results["metadatas"])
             )
 
-            # Format display name with dots instead of underscores
             display_name = collection.replace("_", ".")
             if has_summary:
                 collection_choices.append((f"📝 {display_name}", collection))
@@ -112,7 +146,15 @@ class GradioChat:
     def delete_collection(
         self, collections_to_delete: List[str]
     ) -> Tuple[List[str], List[str]]:
-        """Delete selected collections and refresh the list"""
+        """
+        Delete selected collections and refresh the collection list.
+
+        Args:
+            collections_to_delete (List[str]): Collections to be deleted
+
+        Returns:
+            Tuple[str, gr.Dropdown]: Status message and updated dropdown component
+        """
         if not collections_to_delete:
             return "Please select collections to delete", gr.Dropdown()
 
@@ -122,17 +164,14 @@ class GradioChat:
         for collection in collections_to_delete:
             if db.delete_collection(collection):
                 success.append(collection)
-                # Remove from current selections
                 self.current_collections = [
                     c for c in self.current_collections if c != collection
                 ]
             else:
                 failed.append(collection)
 
-        # Get updated collection list
         collections = db.get_available_collections()
 
-        # Build status message
         status_msg = []
         if success:
             status_msg.append(f"Successfully deleted: {', '.join(success)}")
@@ -148,7 +187,6 @@ class GradioChat:
                 and any(metadata.get("summary") for metadata in results["metadatas"])
             )
 
-            # Format display name with dots instead of underscores
             display_name = collection.replace("_", ".")
             if has_summary:
                 collection_choices.append((f"📝 {display_name}", collection))
@@ -165,26 +203,31 @@ class GradioChat:
         )
 
     def format_all_references(self, excerpts) -> str:
-        """Format all references into a single string"""
+        """
+        Format all references into a single markdown string.
+
+        Args:
+            excerpts: List of reference excerpts with metadata
+
+        Returns:
+            str: Formatted markdown string of all references
+        """
         if not excerpts:
             return "No references available for this response."
 
         formatted_refs = []
         for i, excerpt in enumerate(excerpts, 1):
-            # Build reference header
             ref_text = [f"**Reference [{i}]** from {excerpt['url']}"]
 
-            # Add metadata
             ref_text.append(f"Relevance Score: {1 - excerpt['distance']:.2f}")
             if "metadata" in excerpt and excerpt["metadata"].get("summary"):
                 ref_text.append(f"Summary: {excerpt['metadata']['summary']}")
 
-            # Add separator and main text
             ref_text.extend(
                 [
-                    "",  # Empty line before content
+                    "",
                     excerpt["text"],
-                    "-" * 80,  # Separator between references
+                    "-" * 80,
                 ]
             )
 
@@ -201,25 +244,35 @@ class GradioChat:
         progress: gr.HTML,
         tqdm_status: gr.Textbox,
     ) -> Tuple[str, str]:
-        """Start the scraping process and update progress"""
+        """
+        Start the scraping process with progress updates.
+
+        Args:
+            url (str): URL to scrape
+            dump_text (bool): Whether to dump raw text
+            force_rescrape (bool): Whether to rescrape existing content
+            use_cluster (bool): Whether to use cluster-based chunking
+            progress (gr.HTML): Gradio HTML component for progress display
+            tqdm_status (gr.Textbox): Gradio textbox for tqdm status
+
+        Returns:
+            Tuple[str, str]: Progress log and status message
+        """
         if not url.startswith(("http://", "https://")):
             yield "Error: Invalid URL. Must start with http:// or https://", ""
             return
 
-        # Create handler for the Gradio progress box
         progress_handler = None
         monitor_task = None
         scrape_task = None
 
         try:
-            # Set the chunking method based on checkbox - this affects ChromaHandler globally
             chunking_manager = ChunkingManager()
             if use_cluster:
                 chunking_manager.use_cluster_chunker()
             else:
                 chunking_manager.use_recursive_chunker()
 
-            # Create handler for the Gradio progress box
             class ProgressHandler(logging.Handler):
                 def __init__(self):
                     super().__init__()
@@ -229,18 +282,14 @@ class GradioChat:
                 def emit(self, record):
                     msg = self.format(record) + "\n"
 
-                    # Extract tqdm output
                     if "Pages Scraped:" in msg and "pages/s" in msg:
-                        # Safely extract the tqdm line
                         parts = msg.split("scraper | ")
                         if len(parts) > 1:
                             self.tqdm_text = parts[1].strip()
 
-                    # Add colored message to log
                     colored_msg = colorize_log(msg)
-                    self.log_text += colored_msg
+                    self.log_text = colored_msg + self.log_text
 
-            # Set up handler
             progress_handler = ProgressHandler()
             progress_handler.setFormatter(
                 logging.Formatter(
@@ -249,13 +298,10 @@ class GradioChat:
                 )
             )
 
-            # Add handler
             logging.getLogger().addHandler(progress_handler)
 
-            # Create queue for progress updates
             queue = asyncio.Queue()
 
-            # Create a task to monitor the log and update progress
             async def monitor_progress():
                 last_length = 0
                 last_tqdm = ""
@@ -267,26 +313,22 @@ class GradioChat:
                             await queue.put((current_text[last_length:], current_tqdm))
                             last_length = len(current_text)
                             last_tqdm = current_tqdm
-                        await asyncio.sleep(0.01)  # Check every 10ms
+                        await asyncio.sleep(0.01)
                 except asyncio.CancelledError:
                     logger.debug("Monitor task cancelled")
                     raise
 
-            # Start progress monitor
             monitor_task = asyncio.create_task(monitor_progress())
 
-            # Load scraping config
             config = load_config(CONFIG_FILE)
             proxies = config.get("proxies", [])
             rate_limit = config.get("rate_limit", 5)
             user_agent = config.get("user_agent", "MyScraperBot/1.0")
 
-            # Start scraper in background
             scrape_task = asyncio.create_task(
                 scrape_recursive(url, user_agent, rate_limit, dump_text, force_rescrape)
             )
 
-            # Stream progress updates while scraping runs
             try:
                 while not scrape_task.done():
                     try:
@@ -302,7 +344,6 @@ class GradioChat:
                     except asyncio.TimeoutError:
                         continue
 
-                # Get final result and any remaining logs
                 await scrape_task
                 yield (
                     progress_handler.log_text
@@ -311,7 +352,6 @@ class GradioChat:
                 )
 
             except Exception as e:
-                # Cancel tasks in case of error
                 if not scrape_task.done():
                     scrape_task.cancel()
                     try:
@@ -330,7 +370,6 @@ class GradioChat:
             )
 
         finally:
-            # Clean up tasks and handlers
             if monitor_task and not monitor_task.done():
                 monitor_task.cancel()
                 try:
@@ -352,7 +391,18 @@ class GradioChat:
     async def chat(
         self, message: str, history: list, collections: list, model: str
     ) -> AsyncGenerator[Tuple[List[dict], str], None]:
-        """Handle chat interaction with streaming"""
+        """
+        Handle streaming chat interaction with the selected collections.
+
+        Args:
+            message (str): User input message
+            history (list): Chat history
+            collections (list): Selected collections to search
+            model (str): Selected language model
+
+        Yields:
+            Tuple[List[dict], str]: Updated chat history and formatted references
+        """
         if not self.chat_interface:
             history.append(
                 {
@@ -368,30 +418,22 @@ class GradioChat:
             yield history, ""
             return
 
-        # Format user message
         history.append({"role": "user", "content": message})
-        # Add empty assistant message
         history.append({"role": "assistant", "content": ""})
 
-        # Initialize references display
         self.current_excerpts = []
         current_response = ""
 
         try:
-            # Stream the response
             async for chunk, excerpts in self.chat_interface.get_response(message):
-                # Update references
                 if excerpts and not self.current_excerpts:
                     self.current_excerpts = excerpts
                     references_text = self.format_all_references(excerpts)
                 else:
                     references_text = self.format_all_references(self.current_excerpts)
 
-                # Handle chunk whether it's a string or dict with content
                 chunk_text = chunk["content"] if isinstance(chunk, dict) else chunk
-                # Append to current response
                 current_response += chunk_text
-                # Update the last message (assistant's response)
                 history[-1]["content"] = current_response
 
                 yield history, references_text
@@ -404,14 +446,22 @@ class GradioChat:
     def initialize_chat(
         self, collections: list, model: str, rate_limit: int = 9
     ) -> Tuple[List[dict], str, str]:
-        """Initialize (or switch) chat interface"""
+        """
+        Initialize or switch chat interface with new collections.
+
+        Args:
+            collections (list): Collections to initialize chat with
+            model (str): Language model to use
+            rate_limit (int, optional): Rate limit for API calls. Defaults to 9.
+
+        Returns:
+            Tuple[List[dict], str, str]: Empty history, status message, and empty references
+        """
         if not collections:
             return [], "Please select at least one documentation source.", ""
 
-        # Configure rate limit
         LLMConfig.configure_rate_limit(rate_limit)
 
-        # Create new chat interface
         self.chat_interface = ChatInterface(collections, model)
         self.current_collections = collections
         self.history = []
@@ -426,7 +476,18 @@ class GradioChat:
         regenerate: bool = False,
         progress=gr.Progress(),
     ) -> str:
-        """Generate summaries for all documents in selected collections."""
+        """
+        Generate or regenerate summaries for documents in selected collections.
+
+        Args:
+            collections (list): Collections to generate summaries for
+            model (str): Language model to use
+            regenerate (bool, optional): Whether to regenerate existing summaries. Defaults to False.
+            progress (gr.Progress, optional): Gradio progress component
+
+        Returns:
+            str: Status message with summary generation results
+        """
         if not collections:
             return "Please select at least one collection."
 
@@ -438,11 +499,10 @@ class GradioChat:
         total_skipped = 0
         failed_docs = []
         max_retries = 3
-        retry_delay = 5  # seconds
+        retry_delay = 5
 
         try:
             for collection_name in collections:
-                # Get all documents from collection
                 docs = self.chat_interface.db.get_all_documents(collection_name)
                 if not docs or not docs["documents"]:
                     continue
@@ -453,13 +513,11 @@ class GradioChat:
                 for i, (doc_id, text) in enumerate(zip(docs["ids"], docs["documents"])):
                     progress((i + 1) / total_docs)
 
-                    # Skip if already has summary and not regenerating
                     if not regenerate and docs["metadatas"][i].get("summary"):
                         total_skipped += 1
                         total_processed += 1
                         continue
 
-                    # Generate summary using the chat model with retries
                     prompt = f"""Instruction:
                                 Summarize the following text in one sentence, focusing on its key purpose, main idea, and unique value. Avoid unnecessary details and keep it concise. Do not include any preamble, such as "Here is a summarized answer."
                                 
@@ -490,7 +548,6 @@ class GradioChat:
                                 summary_chunks.append(chunk_text)
                             summary = "".join(summary_chunks).strip()
 
-                            # Verify we got a valid summary
                             if summary and not summary.startswith("Error"):
                                 success = True
                                 break
@@ -500,13 +557,10 @@ class GradioChat:
                                 f"Error generating summary (attempt {retry + 1}) for {doc_id}: {str(e)}"
                             )
                             if retry < max_retries - 1:
-                                await asyncio.sleep(
-                                    retry_delay * (retry + 1)
-                                )  # Exponential backoff
+                                await asyncio.sleep(retry_delay * (retry + 1))
                             continue
 
                     if success:
-                        # Update document metadata with summary
                         if self.chat_interface.db.update_document_metadata(
                             collection_name, doc_id, {"summary": summary}
                         ):
@@ -535,23 +589,21 @@ async def process_chat(
     msg, hist, colls, mdl, pm, chat_app: GradioChat
 ) -> AsyncGenerator[Tuple[List[dict], str], None]:
     """
-    Handle both Plan Mode and regular chat.
+    Handle chat processing for both Plan Mode and regular chat.
 
     Args:
-        msg (str): User message.
-        hist (list): Chat history.
-        colls (list): Selected collections.
-        mdl (str): Selected model.
-        pm (bool): Plan Mode toggle.
-        chat_app (GradioChat): Instance of GradioChat.
+        msg (str): User message
+        hist (list): Chat history
+        colls (list): Selected collections
+        mdl (str): Selected model
+        pm (bool): Plan Mode toggle
+        chat_app (GradioChat): Instance of GradioChat
 
     Yields:
-        tuple: (updated_history, references_text)
+        Tuple[List[dict], str]: Updated history and references text
     """
     if not pm:
-        # Regular Chat Mode
         if not chat_app.chat_interface:
-            # Initialize chat interface if not already done
             chat_app.initialize_chat(colls, mdl)
 
         if not msg:
@@ -559,13 +611,10 @@ async def process_chat(
             yield hist, ""
             return
 
-        # Stream the response from regular chat
         async for updated_history, refs in chat_app.chat(msg, hist, colls, mdl):
             yield updated_history, refs
     else:
-        # Plan Mode
         if not chat_app.chat_interface:
-            # Initialize chat interface if not already done
             chat_app.initialize_chat(colls, mdl)
 
         if not msg:
@@ -573,38 +622,37 @@ async def process_chat(
             yield hist, chat_app.format_plan_mode_references()
             return
 
-        # Stream the response from Plan Mode via ChatInterface
         async for updated_history, refs in chat_app.chat_interface.plan_mode_chat(
             msg, hist, colls, mdl
         ):
             yield updated_history, refs
 
 
-def load_doc_links():
-    """Load documentation links from docs.md"""
+def load_doc_links() -> dict:
+    """
+    Load documentation links from docs.md file.
+
+    Returns:
+        dict: Dictionary of documentation links
+    """
     try:
         with open("docs.md", "r") as f:
             content = f.read()
 
-        # Parse the markdown table using regex
         links = []
         current_category = None
         for line in content.split("\n"):
             if line.startswith("## "):
                 current_category = line[3:].strip()
-            elif (
-                "|" in line and "[" in line and "]" in line and "http" in line
-            ):  # Only match lines with URLs
-                # Skip header and separator lines
+            elif "|" in line and "[" in line and "]" in line and "http" in line:
                 if "---" in line or "Project" in line:
                     continue
                 parts = [p.strip() for p in line.split("|") if p.strip()]
-                if len(parts) >= 2:  # At least project and docs link
+                if len(parts) >= 2:
                     project = parts[0]
                     url_match = re.search(r"\((.*?)\)", parts[1])
                     if url_match:
                         url = url_match.group(1)
-                        # Check if we have tags
                         tags = parts[2].split(",") if len(parts) > 2 else []
                         tags = [tag.strip() for tag in tags]
                         tag_text = f" [🏷️ {', '.join(tags)}]" if tags else ""
@@ -629,12 +677,10 @@ def create_demo():
 
     def update_embedding_model(model_name):
         try:
-            # Update config
             config = load_config(CONFIG_FILE)
             config["embeddings"]["models"]["default"] = model_name
             save_config(config, CONFIG_FILE)
 
-            # Reinitialize embedding manager
             EmbeddingManager._instance = None
             EmbeddingManager()
 
@@ -645,7 +691,6 @@ def create_demo():
     chat_app = GradioChat()
 
     with gr.Blocks(title="Documentation Chat & Scraper", css=gradio_css) as demo:
-        # Configure queue with default settings
         demo.queue(default_concurrency_limit=1)
 
         with gr.Tabs():
@@ -657,7 +702,6 @@ def create_demo():
                         """
                 )
 
-                # Add dropdown for predefined documentation links
                 doc_links = gr.Dropdown(
                     choices=load_doc_links(),
                     label="Select Documentation",
@@ -668,7 +712,6 @@ def create_demo():
                     label="URL", info="Enter the URL of the documentation to scrape"
                 )
 
-                # Add embedding model selector
                 with gr.Row():
                     embedding_model = gr.Dropdown(
                         choices=available_models,
@@ -680,7 +723,6 @@ def create_demo():
                         info="Status", label="Model Status", interactive=False
                     )
 
-                # Connect embedding model change event
                 embedding_model.change(
                     fn=update_embedding_model,
                     inputs=[embedding_model],
@@ -690,13 +732,10 @@ def create_demo():
                 def update_url(selected):
                     if not selected:
                         return ""
-                    # Get the part after the colon which contains the URL and the tags.
                     url_with_tags = selected.split(": ")[-1]
-                    # Split again on ' - ' and take the first part (the URL).
                     url = url_with_tags.split(" - ")[0].strip()
                     return url
 
-                # Update URL textbox when a documentation link is selected
                 doc_links.change(fn=update_url, inputs=[doc_links], outputs=[url])
 
                 with gr.Row():
@@ -726,7 +765,6 @@ def create_demo():
                 )
 
                 scrape_progress = gr.HTML(
-                    # label="Scraping Progress",
                     value="Progress will appear here...",
                     show_label=False,
                     container=True,
@@ -736,7 +774,6 @@ def create_demo():
             with gr.Tab("Chat"):
                 with gr.Row():
                     with gr.Row(elem_id="outer-row"):
-                        # Left column: collections dropdown, then row of model settings
                         with gr.Column(elem_id="left-col"):
                             collections = gr.Dropdown(
                                 choices=chat_app.get_formatted_collections(),
@@ -766,7 +803,6 @@ def create_demo():
                                     info="Experimental Planning",
                                 )
 
-                        # Right column: status, then two rows of buttons/checkbox
                         with gr.Column(elem_id="right-col"):
                             status_text = gr.Textbox(
                                 label="Status",
@@ -775,7 +811,6 @@ def create_demo():
                                 elem_id="status-text",
                             )
 
-                            # First row of button + checkbox
                             with gr.Row(equal_height=True):
                                 add_summaries_btn = gr.Button(
                                     "📝 Add Summaries",
@@ -788,7 +823,6 @@ def create_demo():
                                     min_width=350,
                                 )
 
-                            # Second row of two buttons
                             with gr.Row(equal_height=True):
                                 delete_btn = gr.Button(
                                     "🗑️ Delete Collection", variant="secondary"
@@ -800,20 +834,20 @@ def create_demo():
                 with gr.Row():
                     chatbot = gr.Chatbot(
                         value=[],
-                        type="messages",  # Use modern message format
+                        type="messages",
                         label="Chat History",
                         height=400,
                         show_label=True,
                         container=True,
                         elem_classes="chat-window",
                         render_markdown=True,
-                        layout="bubble",  # Better layout for markdown content
-                        line_breaks=True,  # Preserve line breaks in messages
-                        latex_delimiters=[  # Support LaTeX for math
+                        layout="bubble",
+                        line_breaks=True,
+                        latex_delimiters=[
                             {"left": "$$", "right": "$$", "display": True},
                             {"left": "$", "right": "$", "display": False},
                         ],
-                        sanitize_html=True,  # Safely render HTML/markdown
+                        sanitize_html=True,
                     )
 
                 with gr.Row():
@@ -828,16 +862,12 @@ def create_demo():
                         "Send", variant="primary", scale=1, min_width=100
                     )
 
-                # Create accordion but don't update its state
                 accordion = gr.Accordion("References", open=False)
                 with accordion:
                     references = gr.Markdown(
                         value="No references available yet.", show_label=False
                     )
 
-                # Event handlers
-
-                # Scraping events
                 scrape_btn.click(
                     fn=chat_app.start_scraping,
                     inputs=[
@@ -849,12 +879,11 @@ def create_demo():
                         tqdm_status,
                     ],
                     outputs=[scrape_progress, tqdm_status],
-                    api_name="start_scraping",  # Add API name for better queue handling
-                    show_progress=True,  # Show progress in the UI
-                    concurrency_limit=1,  # Only allow one scraping job at a time
+                    api_name="start_scraping",
+                    show_progress=True,
+                    concurrency_limit=1,
                 )
 
-                # Collection management events
                 refresh_btn.click(
                     fn=chat_app.refresh_databases,
                     inputs=[collections],
@@ -868,11 +897,10 @@ def create_demo():
                     outputs=[status_text, collections],
                     show_progress=True,
                 ).then(
-                    fn=lambda: None,  # Clear chat history after deletion
+                    fn=lambda: None,
                     outputs=[chatbot],
                 )
 
-                # Database or LLM dropdown changes
                 collections.change(
                     fn=chat_app.initialize_chat,
                     inputs=[collections, model, rate_limit],
@@ -893,7 +921,6 @@ def create_demo():
                     """
                     Handle the submit action for both Plan Mode and regular chat.
                     """
-                    # Process the chat and yield results
                     async for updated_history, refs in process_chat(
                         msg, hist, colls, mdl, pm, chat_app
                     ):
@@ -906,7 +933,6 @@ def create_demo():
                     queue=True,
                 ).then(fn=lambda: "", outputs=message)
 
-                # Send on ENTER
                 message.submit(
                     fn=handle_submit,
                     inputs=[message, chatbot, collections, model, plan_mode],
@@ -914,7 +940,6 @@ def create_demo():
                     queue=True,
                 ).then(fn=lambda: "", outputs=message)
 
-                # Connect add summaries button
                 add_summaries_btn.click(
                     fn=chat_app.generate_summaries,
                     inputs=[collections, model, regenerate_summaries],
@@ -924,14 +949,12 @@ def create_demo():
             with gr.Tab("Settings"):
                 save_button, status_output = create_settings_tab()
 
-                # When settings are saved, refresh the global config and UI components
                 def refresh_app_config():
                     """Refresh the global config and update UI components"""
                     global config
                     with open("scraper_config.json", "r") as f:
                         config = json.load(f)
 
-                    # Return updates for both chat and embedding model dropdowns
                     return [
                         gr.update(
                             choices=config["chat"]["models"]["available"],
@@ -944,12 +967,11 @@ def create_demo():
                         "Settings updated - Models refreshed",
                     ]
 
-                # Connect both save and refresh buttons to update components
                 save_button.click(
                     fn=refresh_app_config,
                     inputs=[],
                     outputs=[model, embedding_model, status_output],
-                ).then(  # Also reinitialize the chat interface
+                ).then(
                     fn=chat_app.initialize_chat,
                     inputs=[collections, model, rate_limit],
                     outputs=[chatbot, status_text, references],
