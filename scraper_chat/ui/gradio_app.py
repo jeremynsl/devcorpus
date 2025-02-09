@@ -217,23 +217,27 @@ class GradioChat:
 
         formatted_refs = []
         for i, excerpt in enumerate(excerpts, 1):
-            ref_text = [f"**Reference [{i}]** from {excerpt['url']}"]
+            ref_parts = [
+                f"### Reference {i}",
+                f"**Source:** {excerpt['url']}",
+                f"**Relevance:** {1 - excerpt['distance']:.2f}",
+            ]
 
-            ref_text.append(f"Relevance Score: {1 - excerpt['distance']:.2f}")
             if "metadata" in excerpt and excerpt["metadata"].get("summary"):
-                ref_text.append(f"Summary: {excerpt['metadata']['summary']}")
+                ref_parts.append(f"**Summary:** {excerpt['metadata']['summary']}")
 
-            ref_text.extend(
-                [
-                    "",
-                    excerpt["text"],
-                    "-" * 80,
-                ]
-            )
+            content = excerpt["text"].strip()
 
-            formatted_refs.append("\n".join(ref_text))
+            content = re.sub(r"<[^>]+>", "", content)
 
-        return "\n".join(formatted_refs)
+            content = re.sub(r"\s+", " ", content)
+
+            content = re.sub(r"\n\s*\n+", "\n\n", content)
+
+            ref_parts.extend(["", content, "---"])
+            formatted_refs.append("\n".join(ref_parts))
+
+        return "\n\n".join(formatted_refs)
 
     async def start_scraping(
         self,
