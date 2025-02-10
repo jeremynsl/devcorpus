@@ -49,8 +49,8 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/webscraper-rag-chat.git
-   cd webscraper-rag-chat
+   git clone https://github.com/jeremynsl/devcorpus.git
+   cd devcorpus
    ```
 
 2. Install dependencies either globally or in a python virtual environment (python -m venv venv)
