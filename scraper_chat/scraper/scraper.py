@@ -737,11 +737,19 @@ async def scrape_recursive(
     if sitemap_urls:
         logger.info(f"Found {len(sitemap_urls)} URLs in sitemap")
         # Filter out blog posts from sitemap
-        sitemap_urls = [url for url in sitemap_urls if not is_blog_post(url)]
-        logger.info(f"Filtered to {len(sitemap_urls)} non-blog URLs")
-        for url in sitemap_urls:
-            if url not in visited and should_follow_link(url, start_url, start_path):
-                await to_visit.put(url)
+        non_blog_urls = [url for url in sitemap_urls if not is_blog_post(url)]
+        logger.info(f"Filtered to {len(non_blog_urls)} non-blog URLs")
+        
+        # Queue all valid non-blog URLs for scraping
+        queued_count = 0
+        for url in non_blog_urls:
+            normalized_url = remove_anchor(url)
+            if normalized_url not in visited and should_follow_link(normalized_url, start_url, start_path):
+                await to_visit.put(normalized_url)
+                queued_count += 1
+                logger.info(f"Queued {normalized_url} for scraping")
+        
+        logger.info(f"Queued {queued_count} URLs for scraping")
     else:
         logger.info("No sitemap found, using recursive crawling")
         await to_visit.put(remove_anchor(start_url))
