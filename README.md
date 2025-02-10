@@ -8,7 +8,7 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
 
 ## Features
 
--  **Smart Web Scraping**
+-  ### Smart Web Scraping
   - Recursive website scraping for entire documentation sites (No API key required)
   - Pre-loaded with [~500 software documentation site URLs](docs.md) in the repository
   - Intelligent rate limiting and user agent management
@@ -16,7 +16,7 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
   - Support for both single pages and entire domains
   - Respects robots.txt and sitemap.xml
 
--  **Vector Database Storage**
+-  ### Vector Database Storage
   - ChromaDB integration for efficient vector storage
   - Switchable embedding models via SentenceTransformers
   - Smart text chunking with configurable settings
@@ -24,7 +24,7 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
   - Support for multiple collections
   - Option to save scraped text to a local .txt file (use case: can paste directly into LLM context)
 
--  **Advanced Chat Interface**
+-  ### Advanced Chat Interface
   - RAG-powered conversations with scraped content
   - Can chat with multiple collections at once
   - Support for multiple LLM providers via LiteLLM (Gemini, GPT, Claude, OpenRouter etc)
@@ -32,12 +32,12 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
   - Dynamic RAG prompts depending on relevance of retrieved documents
   - Citation of sources in responses
 
--  **Plan Mode**
+-  ### Plan Mode
   - Experimental Two-phase planning and execution for complex queries
   - Step-by-step solution generation
   - Context-aware document retrieval for each step
 
--  **Modern Gradio UI**
+-  ### Modern Gradio UI
   - User-friendly interface for scraping and chat
   - Real-time progress tracking
   - Collection management
