@@ -14,6 +14,7 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
   - Intelligent rate limiting and user agent management
   - Advanced text extraction with boilerplate removal
   - Support for both single pages and entire domains
+  - Respects robots.txt and sitemap.xml
 
 -  **Vector Database Storage**
   - ChromaDB integration for efficient vector storage
@@ -21,13 +22,14 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
   - Smart text chunking with configurable settings
   - Automatic document deduplication
   - Support for multiple collections
-  - Option to save scraped text to a local .txt file (can paste directly into LLM context)
+  - Option to save scraped text to a local .txt file (use case: can paste directly into LLM context)
 
 -  **Advanced Chat Interface**
   - RAG-powered conversations with scraped content
   - Can chat with multiple collections at once
   - Support for multiple LLM providers via LiteLLM (Gemini, GPT, Claude, OpenRouter etc)
-  - Real-time document retrieval and with reranking for better results
+  - Real-time document retrieval and with re-ranking for better results
+  - Dynamic RAG prompts depending on relevance of retrieved documents
   - Citation of sources in responses
 
 -  **Plan Mode**
@@ -88,6 +90,7 @@ The Settings UI page allows you to configure various settings for the applicatio
 - **Initial Retrieval Percentage**: Percentage of documents from each collection to retrieve in the initial search phase (0.0-1.0).
 - **Minimum Initial Results**: Minimum number of documents to retrieve, regardless of percentage.
 - **Maximum Initial Results**: Maximum number of documents to retrieve, regardless of percentage.
+- **Similarity Threshold**: Similarity threshold filters documents to retrieve based on relevance (0.0-1.0).
 
 ### Chunking Settings
 - **Chunk Size**: Target size for text chunks when splitting documents.
@@ -100,7 +103,9 @@ The Settings UI page allows you to configure various settings for the applicatio
 - **Retry Base Delay**: Initial delay (in seconds) between retry attempts.
 - **Retry Maximum Delay**: Maximum delay (in seconds) between retry attempts.
 - **System Prompt**: Base prompt that defines the AI chat assistant's behavior.
-- **RAG Prompt**: Template for how the AI should use retrieved documents to answer questions.
+- **RAG Prompt**: Fallback template for how the AI should use retrieved documents to answer questions.
+- **RAG Prompt High Quality**: Prompt that is used when high-quality context is available, prefers RAG over internal weights.
+- **RAG Prompt Low Quality**: Prompt that is used when low-quality context is available, prefers internal weights over RAG.
 - **Available Chat Models**: List of LLM models available for chat (supports various providers via LiteLLM).
 - **Default Chat Model**: The default LLM model to use for chat interactions.
 
@@ -157,6 +162,7 @@ A: First ensure you've selected a documentation source in the dropdown. Also ver
 - Python 3.11.1+
 - ChromaDB
 - Gradio
+- aiohttp
 - LiteLLM (for LLM integration)
 - Trafilatura (for text extraction)
 - Additional dependencies in `requirements.txt`
@@ -174,3 +180,6 @@ Apache 2.0
 - Built with [Gradio](https://gradio.app/)
 - Vector storage by [ChromaDB](https://www.trychroma.com/)
 - Text extraction using [Trafilatura](https://trafilatura.readthedocs.io/)
+- LLM integration using [LiteLLM](https://docs.litellm.ai/docs/)
+- Web scraping using [aiohttp](https://docs.aiohttp.org/en/stable/)
+- Chunking implementation from [Brandon Starxel's excellent code](https://github.com/brandonstarxel/chunking_evaluation)
