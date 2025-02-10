@@ -59,7 +59,7 @@ DevCorpus is a powerful web scraping application that allows you to scrape entir
    ```
 3. Note that this installs PyTorch (CPU only) by default. To install with GPU support, install a CUDA-capable PyTorch version from [here](https://pytorch.org/get-started/locally/).
 
-4. Add your API keys to .env-example file and rename it to .env.
+4. Add your API keys to .env-example file and rename it to .env.  Rename scraper_config_example.json to scraper_config.json.
 
 5. Run the application:
    ```bash
